@@ -52,6 +52,26 @@ it in the browser with the team passphrase.
 7. Report to the user: new/completed action items, APO + risk changes, PTO changes,
    and anything ambiguous that needs their judgment.
 
+## SCHEDULED DAILY RUN (weekdays 9:00 AM Central)
+
+A local scheduled task ("hpt-daily-update") runs Claude Code every weekday at
+9:00 AM Central (the stand-up ends ~8:30). That session should:
+
+1. `node scripts/find-transcript.mjs` — lists transcripts in ~/Downloads (and any
+   extra dirs passed) whose INTERNAL meeting date is newer than the last processed
+   meeting. Run `git pull` + `node scripts/sync.mjs` first so the comparison is fresh.
+2. If found: run THE DAILY WORKFLOW (below) for each, oldest first.
+3. If none: re-check every ~5 minutes until 10:00 AM, then send a push
+   notification asking Tyler to download the transcript (Teams → the meeting →
+   Recap → download transcript .docx → Downloads folder) and stop. A no-meeting
+   day (holiday) is normal — just say so in the notification.
+4. Finish with a push notification summarizing: new/completed action items,
+   APO/risk/PTO changes, and anything ambiguous.
+
+Transcript supply: Tyler either downloads the .docx after the call (lands in
+Downloads) or a Power Automate flow deposits it into a OneDrive-synced folder —
+if such a folder exists, pass it to find-transcript.mjs as an extra dir.
+
 ## Conventions & gotchas
 
 - Meeting date comes from the transcript header (`Cox HPT-YYYYMMDD_...` + "July 13, 2026" line),
