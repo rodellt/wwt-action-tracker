@@ -1,0 +1,15 @@
+# Plaintext tracker data — only the encrypted file is committed
+data/data.json
+
+# Secrets (team passphrase)
+.secrets/
+
+# Never commit meeting transcripts or the Excel tracker
+*.docx
+*.xlsx
+*.xlsm
+
+# OS noise
+Thumbs.db
+.DS_Store
+.claude/settings.local.json

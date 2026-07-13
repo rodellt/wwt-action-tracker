@@ -1,0 +1,638 @@
+/* Cox HPT Daily Stand-Up Tracker
+ * Static app served from GitHub Pages. Data lives in data/data.enc.json
+ * (AES-256-GCM, key derived from the team passphrase via PBKDF2-SHA256).
+ * Completing an item with a GitHub token saves for everyone by committing
+ * the re-encrypted file through the GitHub Contents API; without a token,
+ * completions are kept on this device only until the next transcript update.
+ */
+(() => {
+'use strict';
+
+const CONFIG = {
+  owner: 'rodellt',
+  repo: 'wwt-action-tracker',
+  branch: 'main',
+  dataPath: 'data/data.enc.json',
+};
+
+const LS = {
+  pass: 'hpt.pass',
+  pat: 'hpt.pat',
+  name: 'hpt.name',
+  theme: 'hpt.theme',
+  localDone: 'hpt.localDone',
+};
+
+const state = {
+  env: null,        // encrypted envelope as fetched
+  data: null,       // decrypted tracker object
+  passphrase: null,
+  busy: false,
+};
+
+/* ---------------- crypto (must match scripts/crypto-utils.mjs) ---------------- */
+const ITERATIONS = 310000;
+const te = new TextEncoder();
+const td = new TextDecoder();
+
+function b64ToBytes(b64) {
+  const bin = atob(b64.replace(/\s/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function bytesToB64(bytes) {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+async function deriveKey(pass, salt, iterations) {
+  const km = await crypto.subtle.importKey('raw', te.encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+async function decryptEnvelope(env, pass) {
+  const key = await deriveKey(pass, b64ToBytes(env.salt), env.iter);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(env.iv) }, key, b64ToBytes(env.ct));
+  return JSON.parse(td.decode(pt));
+}
+async function encryptEnvelope(obj, pass) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(pass, salt, ITERATIONS);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(JSON.stringify(obj))));
+  return {
+    v: 1, kdf: 'PBKDF2-SHA256', iter: ITERATIONS,
+    salt: bytesToB64(salt), iv: bytesToB64(iv), ct: bytesToB64(ct),
+    lastUpdated: obj.lastUpdated ?? new Date().toISOString(),
+  };
+}
+
+/* ---------------- small utils ---------------- */
+const $ = (sel) => document.querySelector(sel);
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function parseDay(s) { return new Date(`${s}T12:00:00`); }
+function fmtDay(s, opts) {
+  if (!s) return '';
+  return parseDay(s).toLocaleDateString(undefined, opts ?? { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function fmtStamp(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function ageDays(created) {
+  const ms = parseDay(todayStr()) - parseDay(created);
+  return Math.max(0, Math.round(ms / 86400000));
+}
+function initials(name) {
+  return name.split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+}
+function hueFor(id) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+function getLS(k, fallback = null) { try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; } }
+function setLS(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+function localDone() { try { return JSON.parse(getLS(LS.localDone, '{}')); } catch { return {}; } }
+function setLocalDone(map) { setLS(LS.localDone, JSON.stringify(map)); }
+
+function toast(msg, kind = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  $('#toast-root').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 4200);
+  setTimeout(() => el.remove(), 4600);
+}
+
+/* ---------------- data fetching ---------------- */
+function ghHeaders(token) {
+  const h = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  if (token) h.Authorization = `Bearer ${token}`;
+  return h;
+}
+const contentsUrl = () =>
+  `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.dataPath}`;
+
+async function fetchViaApi(token) {
+  const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
+  if (!res.ok) throw new Error(`GitHub API read failed (${res.status})`);
+  const info = await res.json();
+  const env = JSON.parse(td.decode(b64ToBytes(info.content)));
+  env._sha = info.sha;
+  return env;
+}
+async function fetchViaSite() {
+  const res = await fetch(`./data/data.enc.json?_=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Data file fetch failed (${res.status})`);
+  return res.json();
+}
+async function fetchEnvelope() {
+  const pat = getLS(LS.pat);
+  if (pat) {
+    try { return await fetchViaApi(pat); } catch { /* fall through */ }
+  }
+  try { return await fetchViaSite(); } catch { /* fall through */ }
+  return fetchViaApi(null);
+}
+
+/* ---------------- remote mutation (complete / reopen) ---------------- */
+async function remoteMutate(mutator, message) {
+  const pat = getLS(LS.pat);
+  if (!pat) throw new Error('no-token');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(pat) });
+    if (res.status === 401 || res.status === 403) throw new Error('GitHub token was rejected — check it in Settings.');
+    if (!res.ok) throw new Error(`GitHub read failed (${res.status})`);
+    const info = await res.json();
+    const env = JSON.parse(td.decode(b64ToBytes(info.content)));
+    const data = await decryptEnvelope(env, state.passphrase);
+    mutator(data);
+    data.lastUpdated = new Date().toISOString();
+    const newEnv = await encryptEnvelope(data, state.passphrase);
+    const put = await fetch(contentsUrl(), {
+      method: 'PUT',
+      headers: ghHeaders(pat),
+      body: JSON.stringify({
+        message,
+        content: bytesToB64(te.encode(JSON.stringify(newEnv, null, 2) + '\n')),
+        sha: info.sha,
+        branch: CONFIG.branch,
+      }),
+    });
+    if (put.ok) { state.data = data; return; }
+    if (put.status !== 409 && put.status !== 422) throw new Error(`GitHub write failed (${put.status})`);
+    // sha conflict — someone else wrote in between; retry with fresh copy
+  }
+  throw new Error('Could not save after several tries — someone else may be editing. Refresh and try again.');
+}
+
+/* ---------------- domain helpers ---------------- */
+const memberById = (id) => state.data.members.find(m => m.id === id);
+const latestMeeting = () => state.data.meetings[0];
+
+function sortMeetings() {
+  state.data.meetings.sort((a, b) => b.date.localeCompare(a.date));
+}
+function notesFor(memberId) {
+  for (const mtg of state.data.meetings) {
+    const notes = mtg.notes?.[memberId];
+    if (notes && notes.length) return { date: mtg.date, notes, isLatest: mtg === latestMeeting() };
+  }
+  return null;
+}
+function activePto(memberId) {
+  const t = todayStr();
+  return (state.data.pto ?? []).find(p => p.member === memberId && p.start <= t && t <= p.end);
+}
+function upcomingPto(memberId) {
+  const t = todayStr();
+  const horizon = new Date(parseDay(t).getTime() + 14 * 86400000).toISOString().slice(0, 10);
+  return (state.data.pto ?? []).find(p => p.member === memberId && p.start > t && p.start <= horizon);
+}
+function openItems(memberId) {
+  const ld = localDone();
+  return state.data.actionItems.filter(i => i.owner === memberId && i.status === 'open' && !ld[i.id]);
+}
+function doneItems(memberId) {
+  const ld = localDone();
+  const remote = state.data.actionItems.filter(i => i.owner === memberId && i.status === 'completed');
+  const local = state.data.actionItems.filter(i => i.owner === memberId && i.status === 'open' && ld[i.id])
+    .map(i => ({ ...i, _local: true, completed: ld[i.id] }));
+  return [...local, ...remote].sort((a, b) => (b.completed?.date ?? '').localeCompare(a.completed?.date ?? ''));
+}
+
+/* ---------------- rendering ---------------- */
+function render() {
+  sortMeetings();
+  renderTopbar();
+  renderAvailability();
+  renderAps();
+  renderRisks();
+  renderOpenSummary();
+  renderTeam();
+  renderFooter();
+}
+
+function renderTopbar() {
+  $('#asof').textContent = `Updated ${fmtStamp(state.data.lastUpdated)}`;
+}
+
+function renderAvailability() {
+  const root = $('#availability');
+  const out = [];
+  const upcoming = [];
+  for (const m of state.data.members) {
+    const now = activePto(m.id);
+    if (now) { out.push({ m, p: now }); continue; }
+    const soon = upcomingPto(m.id);
+    if (soon) upcoming.push({ m, p: soon });
+  }
+  let html = '';
+  if (out.length) {
+    html += `<span class="avail-label">Out today</span>` + out.map(({ m, p }) =>
+      `<span class="avail-chip"><b>${esc(m.name)}</b> ${esc(p.type)} · back ${fmtDay(p.returns, { month: 'short', day: 'numeric' })}</span>`
+    ).join('');
+  }
+  if (upcoming.length) {
+    html += `<span class="avail-label">Upcoming</span>` + upcoming.map(({ m, p }) =>
+      `<span class="avail-chip future"><b>${esc(m.name)}</b> ${esc(p.type)} ${fmtDay(p.start, { month: 'short', day: 'numeric' })}–${fmtDay(p.end, { month: 'short', day: 'numeric' })}</span>`
+    ).join('');
+  }
+  root.innerHTML = html;
+}
+
+function renderAps() {
+  const aps = state.data.advancedPurchase;
+  $('#aps-verified').textContent = `verified ${fmtDay(aps.lastVerified)}`;
+  $('#aps-body').innerHTML =
+    aps.stages.map(s => `
+      <div class="aps-stage">
+        <span class="aps-dot"></span>
+        <div>
+          <div class="aps-label">${esc(s.label)}</div>
+          ${s.note ? `<div class="aps-note">${esc(s.note)}</div>` : ''}
+        </div>
+      </div>`).join('') +
+    (aps.lastVerifiedNote ? `<div class="aps-footnote">${esc(aps.lastVerifiedNote)}</div>` : '');
+}
+
+function renderRisks() {
+  const risks = state.data.risks;
+  $('#risks-count').textContent = `${risks.length} active`;
+  $('#risks-body').innerHTML = risks.map(r => `
+    <li>
+      <div class="risk-title">${esc(r.title)}</div>
+      ${r.detail ? `<div class="risk-detail">${esc(r.detail)}</div>` : ''}
+      ${r.lastUpdateNote ? `<div class="risk-note">${fmtDay(r.lastUpdate, { month: 'short', day: 'numeric' })} — ${esc(r.lastUpdateNote)}</div>` : ''}
+    </li>`).join('');
+}
+
+function renderOpenSummary() {
+  const ld = localDone();
+  const open = state.data.actionItems.filter(i => i.status === 'open' && !ld[i.id]);
+  const mtg = latestMeeting();
+  $('#open-summary').innerHTML =
+    `<b>${open.length}</b> open action item${open.length === 1 ? '' : 's'} across the team · latest stand-up: <b>${esc(fmtDay(mtg.date, { weekday: 'long', month: 'long', day: 'numeric' }))}</b>${mtg.durationMin ? ` (${mtg.durationMin} min)` : ''}`;
+}
+
+function aiItemHtml(item, done) {
+  const c = item.completed;
+  const meta = done
+    ? `Completed ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${c?.method ? ` · ${c.method === 'verbal' ? '🗣 verbal (from transcript)' : '✓ manual'}` : ''}${item._local ? ' · <span class="local-flag">this device only</span>' : ''}${c?.note ? ` · ${esc(c.note)}` : ''}`
+    : `Raised ${fmtDay(item.created, { month: 'short', day: 'numeric' })}${ageDays(item.created) >= 3 ? ` · <span class="age-hot">${ageDays(item.created)}d old</span>` : ` · ${ageDays(item.created)}d`}${item.source ? ` · ${esc(item.source)}` : ''}`;
+  return `
+    <li class="ai-item ${done ? 'done' : ''}" data-id="${esc(item.id)}">
+      <button class="ai-check" data-action="${done ? 'reopen' : 'complete'}" data-id="${esc(item.id)}" title="${done ? 'Reopen this item' : 'Mark complete'}">✓</button>
+      <div class="ai-text">
+        <div class="ai-title">${esc(item.text)}</div>
+        ${item.detail ? `<div class="ai-detail">${esc(item.detail)}</div>` : ''}
+        <div class="ai-meta">${meta}</div>
+      </div>
+    </li>`;
+}
+
+function renderTeam() {
+  const mtg = latestMeeting();
+  const groups = state.data.groups.map(g => {
+    const members = state.data.members.filter(m => m.group === g.id);
+    if (!members.length) return '';
+    const cards = members.map(m => {
+      const pto = activePto(m.id);
+      const absent = mtg.absent?.[m.id];
+      const notes = notesFor(m.id);
+      const open = openItems(m.id);
+      const done = doneItems(m.id).slice(0, 6);
+      let badge = '';
+      if (pto) badge = `<span class="badge badge-ooo">${esc(pto.type)} · back ${fmtDay(pto.returns, { month: 'short', day: 'numeric' })}</span>`;
+      else if (absent) badge = `<span class="badge badge-absent" title="${esc(absent)}">absent ${fmtDay(mtg.date, { month: 'short', day: 'numeric' })}</span>`;
+      return `
+      <div class="card member-card" id="member-${esc(m.id)}">
+        <div class="member-head">
+          <span class="avatar" style="background:hsl(${hueFor(m.id)} 45% 46%)">${esc(initials(m.name))}</span>
+          <div>
+            <div class="member-name">${esc(m.name)}</div>
+            <div class="member-meta">${esc(g.name)}${pto?.note ? ` — ${esc(pto.note)}` : ''}</div>
+          </div>
+          ${badge}
+        </div>
+        ${open.length ? `
+        <div>
+          <div class="section-label"><span>Action items (${open.length})</span></div>
+          <ul class="ai-list">${open.map(i => aiItemHtml(i, false)).join('')}</ul>
+        </div>` : ''}
+        <div>
+          <div class="section-label">
+            <span>Notes</span>
+            ${notes ? `<span class="when">${notes.isLatest ? '' : 'last update — '}${fmtDay(notes.date)}</span>` : ''}
+          </div>
+          ${notes
+            ? `<ul class="notes-list">${notes.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+            : `<div class="notes-empty">No notes yet.</div>`}
+          ${absent && notes && !notes.isLatest ? `<div class="notes-empty" style="margin-top:4px">${fmtDay(mtg.date, { month: 'short', day: 'numeric' })}: ${esc(absent)}</div>` : ''}
+        </div>
+        ${done.length ? `
+        <details class="completed-fold">
+          <summary>Recently completed (${done.length})</summary>
+          <ul class="ai-list">${done.map(i => aiItemHtml(i, true)).join('')}</ul>
+        </details>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="group-block"><h3 class="group-title">${esc(g.name)}</h3><div class="member-grid">${cards}</div></div>`;
+  }).join('');
+  $('#team').innerHTML = groups;
+}
+
+function renderFooter() {
+  $('#footer-updated').textContent = `Data updated ${fmtStamp(state.data.lastUpdated)}`;
+  const repo = $('#footer-repo');
+  repo.href = `https://github.com/${CONFIG.owner}/${CONFIG.repo}`;
+}
+
+/* ---------------- modals ---------------- */
+function openModal(html, narrow = false) {
+  const root = $('#modal-root');
+  root.innerHTML = `<div class="modal-backdrop"><div class="modal ${narrow ? 'narrow' : ''}">${html}</div></div>`;
+  root.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeModal();
+  });
+  root.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeModal));
+  return root;
+}
+function closeModal() { $('#modal-root').innerHTML = ''; }
+
+function confirmCompleteModal(item) {
+  const hasPat = !!getLS(LS.pat);
+  const root = openModal(`
+    <div class="modal-head"><h2>Mark complete</h2><button class="modal-close" data-close>×</button></div>
+    <p style="margin:0 0 4px"><b>${esc(item.text)}</b></p>
+    <p class="muted" style="margin:0;font-size:13px">${esc(memberById(item.owner)?.name ?? item.owner)} · raised ${fmtDay(item.created)}</p>
+    <label for="complete-note">Note (optional)</label>
+    <input id="complete-note" type="text" placeholder="e.g. shipped this morning">
+    <p class="hint">${hasPat
+      ? 'Saves for the whole team — this commits the update to GitHub.'
+      : '⚠ No GitHub token is set (Settings), so this is saved <b>on this device only</b>. It will still count as done here, and it gets baked in for everyone with the next transcript update — or add a token to sync it now.'}</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="complete-go">Mark complete</button>
+    </div>`, true);
+  root.querySelector('#complete-go').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const note = root.querySelector('#complete-note').value.trim();
+    const by = getLS(LS.name) || 'web';
+    if (hasPat) {
+      try {
+        await remoteMutate((d) => {
+          const it = d.actionItems.find(i => i.id === item.id);
+          if (!it) throw new Error('Item no longer exists — refresh.');
+          it.status = 'completed';
+          it.completed = { date: todayStr(), method: 'manual', by, ...(note ? { note } : {}) };
+        }, `Complete: ${item.text.slice(0, 60)} (${by})`);
+        closeModal(); render();
+        toast('Completed — saved for the whole team.', 'ok');
+      } catch (err) {
+        btn.disabled = false;
+        toast(err.message === 'no-token' ? 'Add a GitHub token in Settings first.' : err.message, 'warn');
+      }
+    } else {
+      const ld = localDone();
+      ld[item.id] = { date: todayStr(), method: 'manual', by, ...(note ? { note } : {}) };
+      setLocalDone(ld);
+      closeModal(); render();
+      toast('Marked complete on this device (not synced).', 'warn');
+    }
+  });
+}
+
+function confirmReopenModal(item, isLocal) {
+  const root = openModal(`
+    <div class="modal-head"><h2>Reopen item</h2><button class="modal-close" data-close>×</button></div>
+    <p style="margin:0 0 4px"><b>${esc(item.text)}</b></p>
+    <p class="hint">${isLocal ? 'This undoes the local-only completion on this device.' : 'Puts the item back in the open list for everyone.'}</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="reopen-go">Reopen</button>
+    </div>`, true);
+  root.querySelector('#reopen-go').addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    if (isLocal) {
+      const ld = localDone();
+      delete ld[item.id];
+      setLocalDone(ld);
+      closeModal(); render();
+      toast('Reopened.', 'ok');
+      return;
+    }
+    try {
+      await remoteMutate((d) => {
+        const it = d.actionItems.find(i => i.id === item.id);
+        if (!it) throw new Error('Item no longer exists — refresh.');
+        it.status = 'open';
+        it.completed = null;
+      }, `Reopen: ${item.text.slice(0, 60)}`);
+      closeModal(); render();
+      toast('Reopened for the whole team.', 'ok');
+    } catch (err) {
+      e.currentTarget.disabled = false;
+      toast(err.message === 'no-token' ? 'A GitHub token (Settings) is needed to reopen shared items.' : err.message, 'warn');
+    }
+  });
+}
+
+function historyModal() {
+  const meetings = state.data.meetings;
+  const html = `
+    <div class="modal-head"><h2>Meeting history</h2><button class="modal-close" data-close>×</button></div>
+    ${meetings.map((mtg, idx) => `
+      <details class="history-meeting" ${idx === 0 ? 'open' : ''}>
+        <summary>${esc(fmtDay(mtg.date, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }))}<small>${mtg.durationMin ? `${mtg.durationMin} min` : ''}</small></summary>
+        <div class="history-body">
+          ${mtg.advancedPurchase ? `<div class="history-fact"><b>Advanced purchase:</b> ${esc(mtg.advancedPurchase)}</div>` : ''}
+          ${mtg.risks ? `<div class="history-fact"><b>Risks:</b> ${esc(mtg.risks)}</div>` : ''}
+          ${mtg.funFriday ? `<div class="history-fact"><b>Fun Friday:</b> ${esc(mtg.funFriday)}</div>` : ''}
+          ${mtg.absent && Object.keys(mtg.absent).length ? `<div class="history-fact"><b>Not on:</b> ${esc(Object.entries(mtg.absent).map(([id, why]) => `${memberById(id)?.name ?? id} (${why})`).join(' · '))}</div>` : ''}
+          <div class="history-notes">
+            ${Object.entries(mtg.notes ?? {}).map(([id, notes]) => notes?.length ? `
+              <div class="history-speaker">
+                <h4>${esc(memberById(id)?.name ?? id)}</h4>
+                <ul>${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>
+              </div>` : '').join('')}
+          </div>
+        </div>
+      </details>`).join('')}`;
+  openModal(html);
+}
+
+function settingsModal() {
+  const pat = getLS(LS.pat) ?? '';
+  const name = getLS(LS.name) ?? '';
+  const root = openModal(`
+    <div class="modal-head"><h2>Settings</h2><button class="modal-close" data-close>×</button></div>
+    <label for="set-name">Your name (shown on items you complete)</label>
+    <input id="set-name" type="text" value="${esc(name)}" placeholder="e.g. Tyler">
+    <label for="set-pat">GitHub token (enables one-click complete for the whole team)</label>
+    <input id="set-pat" type="password" value="${esc(pat)}" placeholder="github_pat_… or ghp_…" autocomplete="off">
+    <p class="hint">Fine-grained personal access token for <b>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</b> with <b>Contents: Read and write</b> — nothing else. Create at GitHub → Settings → Developer settings → Fine-grained tokens. Stored only in this browser.</p>
+    <div class="modal-actions" style="justify-content:flex-start;margin-top:10px">
+      <button class="btn btn-small" id="set-test">Test token</button>
+      <span id="set-test-result" class="hint"></span>
+    </div>
+    <div class="settings-info">
+      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing an item with a token commits the change immediately (visible to everyone). Without a token, completions stay on this device and get folded in at the next transcript update. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="set-lock">Lock tracker on this device</button>
+      <button class="btn btn-primary" id="set-save">Save</button>
+    </div>`);
+  root.querySelector('#set-test').addEventListener('click', async () => {
+    const out = root.querySelector('#set-test-result');
+    const tok = root.querySelector('#set-pat').value.trim();
+    if (!tok) { out.textContent = 'Enter a token first.'; return; }
+    out.textContent = 'Testing…';
+    try {
+      const r = await fetch(`https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}`, { headers: ghHeaders(tok) });
+      if (!r.ok) throw new Error(String(r.status));
+      const j = await r.json();
+      out.textContent = j.permissions?.push ? '✓ Token works (write access confirmed).' : '⚠ Token can read but not write this repo.';
+    } catch {
+      out.textContent = '✗ Token was rejected.';
+    }
+  });
+  root.querySelector('#set-save').addEventListener('click', () => {
+    setLS(LS.name, root.querySelector('#set-name').value.trim() || null);
+    setLS(LS.pat, root.querySelector('#set-pat').value.trim() || null);
+    closeModal();
+    toast('Settings saved.', 'ok');
+  });
+  root.querySelector('#set-lock').addEventListener('click', () => {
+    setLS(LS.pass, null);
+    sessionStorage.removeItem(LS.pass);
+    location.reload();
+  });
+}
+
+/* ---------------- boot flow ---------------- */
+function applyTheme() {
+  document.documentElement.dataset.theme = getLS(LS.theme, 'auto');
+}
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark'];
+  const cur = getLS(LS.theme, 'auto');
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  setLS(LS.theme, next);
+  applyTheme();
+  toast(`Theme: ${next}`);
+}
+
+async function tryUnlock(pass) {
+  const data = await decryptEnvelope(state.env, pass);
+  state.passphrase = pass;
+  state.data = data;
+  // Drop local completions that are now completed (or gone) in shared data.
+  const ld = localDone();
+  let changed = false;
+  for (const id of Object.keys(ld)) {
+    const item = state.data.actionItems.find(i => i.id === id);
+    if (!item || item.status === 'completed') { delete ld[id]; changed = true; }
+  }
+  if (changed) setLocalDone(ld);
+}
+
+function showApp() {
+  $('#loading').hidden = true;
+  $('#unlock').hidden = true;
+  $('#topbar').hidden = false;
+  $('#app').hidden = false;
+  render();
+}
+
+function showUnlock(errMsg) {
+  $('#loading').hidden = true;
+  $('#unlock').hidden = false;
+  const err = $('#unlock-error');
+  if (errMsg) { err.textContent = errMsg; err.hidden = false; } else { err.hidden = true; }
+  setTimeout(() => $('#unlock-pass').focus(), 50);
+}
+
+async function refresh(showToast = false) {
+  try {
+    const env = await fetchEnvelope();
+    if (env.ct === state.env?.ct) { if (showToast) toast('Already up to date.', 'ok'); return; }
+    state.env = env;
+    await tryUnlock(state.passphrase);
+    render();
+    if (showToast) toast('Tracker updated.', 'ok');
+  } catch (e) {
+    if (showToast) toast(`Refresh failed: ${e.message}`, 'warn');
+  }
+}
+
+async function boot() {
+  applyTheme();
+  try {
+    state.env = await fetchEnvelope();
+  } catch (e) {
+    $('#loading').innerHTML = `<p class="error">Could not load tracker data (${esc(e.message)}).<br>Check your connection and reload.</p>`;
+    return;
+  }
+  const savedPass = getLS(LS.pass) ?? sessionStorage.getItem(LS.pass);
+  if (savedPass) {
+    try { await tryUnlock(savedPass); showApp(); return; }
+    catch { setLS(LS.pass, null); sessionStorage.removeItem(LS.pass); }
+  }
+  showUnlock();
+}
+
+/* ---------------- events ---------------- */
+document.addEventListener('DOMContentLoaded', () => {
+  $('#unlock-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pass = $('#unlock-pass').value;
+    if (!pass) return;
+    try {
+      await tryUnlock(pass);
+      if ($('#unlock-remember').checked) setLS(LS.pass, pass);
+      else sessionStorage.setItem(LS.pass, pass);
+      showApp();
+    } catch {
+      showUnlock('That passphrase didn’t work — try again.');
+    }
+  });
+
+  $('#btn-sync').addEventListener('click', () => refresh(true));
+  $('#btn-history').addEventListener('click', historyModal);
+  $('#btn-settings').addEventListener('click', settingsModal);
+  $('#btn-theme').addEventListener('click', cycleTheme);
+
+  // Delegated complete / reopen clicks
+  $('#team').addEventListener('click', (e) => {
+    const btn = e.target.closest('.ai-check');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const item = state.data.actionItems.find(i => i.id === id);
+    if (!item) return;
+    if (btn.dataset.action === 'complete') confirmCompleteModal(item);
+    else confirmReopenModal(item, !!localDone()[id]);
+  });
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+  // Gentle auto-refresh while the tab is visible (same-origin fetch — no rate limits).
+  setInterval(() => { if (!document.hidden && state.data) refresh(false); }, 120000);
+
+  boot();
+});
+})();

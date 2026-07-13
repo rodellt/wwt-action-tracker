@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Cox HPT — Daily Stand-Up Tracker</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c9243f'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div id="unlock" class="overlay" hidden>
+  <div class="unlock-box">
+    <div class="unlock-logo">✓</div>
+    <h1>Cox HPT Stand-Up Tracker</h1>
+    <p class="muted">The tracker data is encrypted. Enter the team passphrase to view it.</p>
+    <form id="unlock-form">
+      <input id="unlock-pass" type="password" placeholder="Team passphrase" autocomplete="current-password" autofocus>
+      <label class="check"><input id="unlock-remember" type="checkbox" checked> Remember on this device</label>
+      <button type="submit" class="btn btn-primary btn-wide">Unlock</button>
+      <p id="unlock-error" class="error" hidden></p>
+    </form>
+  </div>
+</div>
+
+<div id="loading" class="overlay">
+  <div class="spinner"></div>
+  <p class="muted">Loading tracker…</p>
+</div>
+
+<header class="topbar" id="topbar" hidden>
+  <div class="brand">
+    <span class="brand-mark">✓</span>
+    <div>
+      <div class="brand-title">Cox HPT</div>
+      <div class="brand-sub">Daily Stand-Up Tracker</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="asof" class="asof" title="When the tracker data was last updated"></span>
+    <button id="btn-sync" class="btn btn-ghost" title="Fetch the latest data">⟳ Sync</button>
+    <button id="btn-history" class="btn btn-ghost">Meeting history</button>
+    <button id="btn-theme" class="btn btn-icon" title="Theme (auto → light → dark)">◐</button>
+    <button id="btn-settings" class="btn btn-icon" title="Settings">⚙</button>
+  </div>
+</header>
+
+<main id="app" hidden>
+  <section id="availability" class="availability"></section>
+
+  <section class="status-row">
+    <div class="card" id="card-aps">
+      <div class="card-head">
+        <h2>Advanced Purchase Status</h2>
+        <span class="chip" id="aps-verified"></span>
+      </div>
+      <div id="aps-body"></div>
+    </div>
+    <div class="card" id="card-risks">
+      <div class="card-head">
+        <h2>Current Risks &amp; Updates</h2>
+        <span class="chip" id="risks-count"></span>
+      </div>
+      <ul id="risks-body" class="risk-list"></ul>
+    </div>
+  </section>
+
+  <section id="open-summary" class="open-summary"></section>
+
+  <section id="team"></section>
+
+  <footer class="footer">
+    <span id="footer-updated"></span>
+    <span>·</span>
+    <a id="footer-repo" href="#" target="_blank" rel="noopener">GitHub repo</a>
+    <span>·</span>
+    <span>Updated after each stand-up from the meeting transcript. Mark items complete here, or say it on the call and it'll be closed out with the next update.</span>
+  </footer>
+</main>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
