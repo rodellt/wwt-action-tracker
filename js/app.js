@@ -8,6 +8,8 @@
 (() => {
 'use strict';
 
+const APP_VERSION = '1.0.1';
+
 const CONFIG = {
   owner: 'rodellt',
   repo: 'wwt-action-tracker',
@@ -118,6 +120,20 @@ function toast(msg, kind = '') {
 }
 
 /* ---------------- data fetching ---------------- */
+function step(s) { if (window.__HPT) window.__HPT.step = s; const el = $('#loading-step'); if (el) el.textContent = s + '…'; }
+
+async function fetchWithTimeout(url, opts = {}, ms = 12000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctl.signal });
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? `timed out after ${ms / 1000}s` : (e.message || 'network error'));
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 function ghHeaders(token) {
   const h = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   if (token) h.Authorization = `Bearer ${token}`;
@@ -127,25 +143,39 @@ const contentsUrl = () =>
   `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.dataPath}`;
 
 async function fetchViaApi(token) {
-  const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
-  if (!res.ok) throw new Error(`GitHub API read failed (${res.status})`);
+  const res = await fetchWithTimeout(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const info = await res.json();
   const env = JSON.parse(td.decode(b64ToBytes(info.content)));
   env._sha = info.sha;
   return env;
 }
 async function fetchViaSite() {
-  const res = await fetch(`./data/data.enc.json?_=${Date.now()}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Data file fetch failed (${res.status})`);
+  const res = await fetchWithTimeout(`./data/data.enc.json?_=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+async function fetchViaRaw() {
+  const res = await fetchWithTimeout(
+    `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${CONFIG.dataPath}?_=${Date.now()}`,
+    { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 async function fetchEnvelope() {
   const pat = getLS(LS.pat);
-  if (pat) {
-    try { return await fetchViaApi(pat); } catch { /* fall through */ }
+  const failures = [];
+  const sources = [
+    ...(pat ? [['GitHub API (token)', () => fetchViaApi(pat)]] : []),
+    ['site data file', fetchViaSite],
+    ['GitHub API', () => fetchViaApi(null)],
+    ['raw.githubusercontent', fetchViaRaw],
+  ];
+  for (const [name, fn] of sources) {
+    try { return await fn(); }
+    catch (e) { failures.push(`${name}: ${e.message}`); }
   }
-  try { return await fetchViaSite(); } catch { /* fall through */ }
-  return fetchViaApi(null);
+  throw new Error(failures.join(' · '));
 }
 
 /* ---------------- remote mutation (complete / reopen) ---------------- */
@@ -356,7 +386,7 @@ function renderTeam() {
 }
 
 function renderFooter() {
-  $('#footer-updated').textContent = `Data updated ${fmtStamp(state.data.lastUpdated)}`;
+  $('#footer-updated').textContent = `Data updated ${fmtStamp(state.data.lastUpdated)} · v${APP_VERSION}`;
   const repo = $('#footer-repo');
   repo.href = `https://github.com/${CONFIG.owner}/${CONFIG.repo}`;
 }
@@ -552,6 +582,7 @@ async function tryUnlock(pass) {
 }
 
 function showApp() {
+  if (window.__HPT) window.__HPT.booted = true;
   $('#loading').hidden = true;
   $('#unlock').hidden = true;
   $('#topbar').hidden = false;
@@ -560,6 +591,7 @@ function showApp() {
 }
 
 function showUnlock(errMsg) {
+  if (window.__HPT) window.__HPT.booted = true;
   $('#loading').hidden = true;
   $('#unlock').hidden = false;
   const err = $('#unlock-error');
@@ -581,13 +613,23 @@ async function refresh(showToast = false) {
 }
 
 async function boot() {
+  console.log(`Cox HPT tracker v${APP_VERSION}`);
   applyTheme();
+  step('Fetching tracker data');
   try {
     state.env = await fetchEnvelope();
   } catch (e) {
-    $('#loading').innerHTML = `<p class="error">Could not load tracker data (${esc(e.message)}).<br>Check your connection and reload.</p>`;
+    if (window.__HPT) window.__HPT.booted = true; // show this message, not the watchdog's
+    $('#loading').innerHTML = `
+      <div style="max-width:560px;text-align:center;padding:0 16px">
+        <p class="error" style="font-size:16px;font-weight:600">Couldn’t load the tracker data.</p>
+        <p class="muted" style="font-size:13px;word-break:break-word">${esc(e.message)}</p>
+        <p class="muted" style="font-size:13px">If this is a work laptop, a security agent may be blocking these requests — try another browser or your phone.</p>
+        <button class="btn btn-primary" onclick="location.reload()">Retry</button>
+      </div>`;
     return;
   }
+  step('Checking saved passphrase');
   const savedPass = getLS(LS.pass) ?? sessionStorage.getItem(LS.pass);
   if (savedPass) {
     try { await tryUnlock(savedPass); showApp(); return; }

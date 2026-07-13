@@ -4,8 +4,8 @@
     {
       "name": "tracker",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scripts/serve.mjs", "8420"],
-      "port": 8420
+      "runtimeArgs": ["scripts/serve.mjs", "8787"],
+      "port": 8787
     }
   ]
 }

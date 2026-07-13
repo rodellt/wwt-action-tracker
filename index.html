@@ -7,6 +7,38 @@
 <title>Cox HPT — Daily Stand-Up Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c9243f'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/styles.css">
+<script>
+/* Boot watchdog (ES5 on purpose): if the app hasn't come up shortly after load,
+   replace the spinner with a diagnostic message instead of hanging forever. */
+(function () {
+  var errs = [];
+  window.__HPT = { booted: false, step: 'starting', errs: errs };
+  function safe(s) { return String(s).replace(/</g, '&lt;'); }
+  window.addEventListener('error', function (e) {
+    errs.push(safe((e.message || 'script error') + (e.filename ? ' — ' + e.filename.split('/').pop() + ':' + (e.lineno || '?') : '')));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    errs.push('async: ' + safe(r && (r.message || r) || 'unknown'));
+  });
+  window.addEventListener('DOMContentLoaded', function () {
+    setTimeout(function () {
+      if (window.__HPT.booted) return;
+      var el = document.getElementById('loading');
+      if (!el) return;
+      el.innerHTML =
+        '<div style="max-width:560px;text-align:center;font-size:14px;line-height:1.6;padding:0 16px">' +
+        '<p style="font-size:17px;font-weight:600;margin:0 0 8px">The tracker didn&#39;t finish loading.</p>' +
+        '<p style="margin:0 0 6px">Stopped at: <b>' + safe(window.__HPT.step) + '</b></p>' +
+        (errs.length ? '<p style="margin:0 0 12px;word-break:break-word;opacity:.8">' + errs.join('<br>') + '</p>' : '') +
+        '<p style="margin:0 0 16px">If this is a work laptop, a security agent may be blocking part of the page. ' +
+        'Try a hard refresh (Ctrl+F5), a different browser, or your phone — and pass along the text above.</p>' +
+        '<button onclick="location.reload()" style="padding:9px 20px;border-radius:8px;border:1px solid #999;background:#c9243f;color:#fff;font-weight:600;cursor:pointer">Retry</button>' +
+        '</div>';
+    }, 9000);
+  });
+})();
+</script>
 </head>
 <body>
 
@@ -26,7 +58,8 @@
 
 <div id="loading" class="overlay">
   <div class="spinner"></div>
-  <p class="muted">Loading tracker…</p>
+  <p class="muted" id="loading-step">Loading tracker…</p>
+  <noscript><p>This page needs JavaScript enabled to decrypt and show the tracker.</p></noscript>
 </div>
 
 <header class="topbar" id="topbar" hidden>
