@@ -54,6 +54,8 @@
 
 /* ============ Base ============ */
 * { box-sizing: border-box; }
+/* The hidden attribute must always win, even over display rules like .overlay's flex */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
