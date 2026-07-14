@@ -8,13 +8,14 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 const CONFIG = {
   owner: 'rodellt',
   repo: 'wwt-action-tracker',
   branch: 'main',
   dataPath: 'data/data.enc.json',
+  editKeyPath: 'data/edit-key.enc.json',
 };
 
 const LS = {
@@ -29,6 +30,7 @@ const state = {
   env: null,        // encrypted envelope as fetched
   data: null,       // decrypted tracker object
   passphrase: null,
+  teamToken: null,  // shared write token, decrypted from data/edit-key.enc.json
   busy: false,
 };
 
@@ -139,28 +141,89 @@ function ghHeaders(token) {
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
-const contentsUrl = () =>
-  `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${CONFIG.dataPath}`;
+const contentsUrl = (path = CONFIG.dataPath) =>
+  `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${path}`;
 
-async function fetchViaApi(token) {
-  const res = await fetchWithTimeout(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
+async function fetchViaApi(token, path = CONFIG.dataPath) {
+  const res = await fetchWithTimeout(`${contentsUrl(path)}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const info = await res.json();
   const env = JSON.parse(td.decode(b64ToBytes(info.content)));
   env._sha = info.sha;
   return env;
 }
-async function fetchViaSite() {
-  const res = await fetchWithTimeout(`./data/data.enc.json?_=${Date.now()}`, { cache: 'no-store' });
+async function fetchViaSite(path = CONFIG.dataPath) {
+  const res = await fetchWithTimeout(`./${path}?_=${Date.now()}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-async function fetchViaRaw() {
+async function fetchViaRaw(path = CONFIG.dataPath) {
   const res = await fetchWithTimeout(
-    `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${CONFIG.dataPath}?_=${Date.now()}`,
+    `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${path}?_=${Date.now()}`,
     { cache: 'no-store' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+/* ---------------- shared team edit key ----------------
+ * data/edit-key.enc.json is a committed envelope holding a fine-grained GitHub
+ * token, encrypted with the same team passphrase as the tracker data. Anyone
+ * who can unlock the page transparently gets edit access — no per-user token.
+ * A personal token in Settings still takes precedence when present. */
+function effectiveToken() {
+  return getLS(LS.pat) || state.teamToken;
+}
+async function loadTeamKey() {
+  const sources = [
+    () => fetchViaSite(CONFIG.editKeyPath),
+    () => fetchViaRaw(CONFIG.editKeyPath),
+    () => fetchViaApi(getLS(LS.pat), CONFIG.editKeyPath),
+  ];
+  for (const fn of sources) {
+    try {
+      const env = await fn();
+      const obj = await decryptEnvelope(env, state.passphrase);
+      if (obj?.token) { state.teamToken = obj.token; return true; }
+    } catch { /* try the next source; a 404 just means no key is published */ }
+  }
+  state.teamToken = null;
+  return false;
+}
+async function publishTeamKey(token) {
+  const envObj = await encryptEnvelope(
+    { token, created: new Date().toISOString(), by: editorName(), lastUpdated: new Date().toISOString() },
+    state.passphrase
+  );
+  const url = contentsUrl(CONFIG.editKeyPath);
+  let sha;
+  const res = await fetch(`${url}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
+  if (res.ok) sha = (await res.json()).sha;
+  const put = await fetch(url, {
+    method: 'PUT',
+    headers: ghHeaders(token),
+    body: JSON.stringify({
+      message: `Publish team edit key (${editorName()})`,
+      content: bytesToB64(te.encode(JSON.stringify(envObj, null, 2) + '\n')),
+      ...(sha ? { sha } : {}),
+      branch: CONFIG.branch,
+    }),
+  });
+  if (!put.ok) throw new Error(`Publishing the team key failed (${put.status}) — check the token has Contents write access.`);
+  state.teamToken = token;
+}
+async function removeTeamKey() {
+  const token = effectiveToken();
+  const url = contentsUrl(CONFIG.editKeyPath);
+  const res = await fetch(`${url}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
+  if (!res.ok) throw new Error('No published team key found.');
+  const info = await res.json();
+  const del = await fetch(url, {
+    method: 'DELETE',
+    headers: ghHeaders(token),
+    body: JSON.stringify({ message: 'Remove team edit key', sha: info.sha, branch: CONFIG.branch }),
+  });
+  if (!del.ok) throw new Error(`Removing the team key failed (${del.status}).`);
+  state.teamToken = null;
 }
 async function fetchEnvelope() {
   const pat = getLS(LS.pat);
@@ -180,7 +243,7 @@ async function fetchEnvelope() {
 
 /* ---------------- remote mutation (complete / reopen) ---------------- */
 async function remoteMutate(mutator, message) {
-  const pat = getLS(LS.pat);
+  const pat = effectiveToken();
   if (!pat) throw new Error('no-token');
   for (let attempt = 1; attempt <= 3; attempt++) {
     const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(pat) });
@@ -255,9 +318,9 @@ function splitDone(memberId) {
 }
 
 /* ---------------- editing helpers ---------------- */
-function requirePat() {
-  if (getLS(LS.pat)) return true;
-  toast('Editing needs a GitHub token — add one in Settings (⚙).', 'warn');
+function requireWrite() {
+  if (effectiveToken()) return true;
+  toast('Editing isn’t enabled on this page yet — no team edit key found. Details in Settings (⚙).', 'warn');
   return false;
 }
 function editorName() { return getLS(LS.name) || 'web'; }
@@ -514,16 +577,16 @@ function openModal(html, narrow = false) {
 function closeModal() { $('#modal-root').innerHTML = ''; }
 
 function confirmCompleteModal(item) {
-  const hasPat = !!getLS(LS.pat);
+  const canWrite = !!effectiveToken();
   const root = openModal(`
     <div class="modal-head"><h2>Mark complete</h2><button class="modal-close" data-close>×</button></div>
     <p style="margin:0 0 4px"><b>${esc(item.text)}</b></p>
     <p class="muted" style="margin:0;font-size:13px">${esc(memberById(item.owner)?.name ?? item.owner)} · raised ${fmtDay(item.created)}</p>
     <label for="complete-note">Note (optional)</label>
     <input id="complete-note" type="text" placeholder="e.g. shipped this morning">
-    <p class="hint">${hasPat
+    <p class="hint">${canWrite
       ? 'Saves for the whole team — this commits the update to GitHub.'
-      : '⚠ No GitHub token is set (Settings), so this is saved <b>on this device only</b>. It will still count as done here, and it gets baked in for everyone with the next transcript update — or add a token to sync it now.'}</p>
+      : '⚠ Shared editing isn’t enabled on this page, so this is saved <b>on this device only</b>. It will still count as done here, and it gets baked in for everyone with the next transcript update.'}</p>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="complete-go">Mark complete</button>
@@ -533,7 +596,7 @@ function confirmCompleteModal(item) {
     btn.disabled = true;
     const note = root.querySelector('#complete-note').value.trim();
     const by = getLS(LS.name) || 'web';
-    if (hasPat) {
+    if (canWrite) {
       try {
         await remoteMutate((d) => {
           const it = d.actionItems.find(i => i.id === item.id);
@@ -800,22 +863,56 @@ function settingsModal() {
   const name = getLS(LS.name) ?? '';
   const root = openModal(`
     <div class="modal-head"><h2>Settings</h2><button class="modal-close" data-close>×</button></div>
-    <label for="set-name">Your name (shown on items you complete)</label>
+    <label for="set-name">Your name (shown on items you complete or edit)</label>
     <input id="set-name" type="text" value="${esc(name)}" placeholder="e.g. Tyler">
-    <label for="set-pat">GitHub token (enables editing and one-click complete for the whole team)</label>
+    <label>Team editing</label>
+    <p class="hint" id="teamkey-status" style="margin-top:0">${state.teamToken
+      ? '✓ <b>Enabled for everyone.</b> A shared edit key is published — anyone who unlocks this page can complete, edit, and add things. No personal token needed.'
+      : 'Not enabled — no shared edit key is published. An admin with a GitHub token can publish one below; until then, editing needs a personal token.'}</p>
+    <label for="set-pat">Personal GitHub token (admin — optional when team editing is enabled)</label>
     <input id="set-pat" type="password" value="${esc(pat)}" placeholder="github_pat_… or ghp_…" autocomplete="off">
-    <p class="hint">Fine-grained personal access token for <b>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</b> with <b>Contents: Read and write</b> — nothing else. Create at GitHub → Settings → Developer settings → Fine-grained tokens. Stored only in this browser.</p>
-    <div class="modal-actions" style="justify-content:flex-start;margin-top:10px">
+    <p class="hint">Fine-grained personal access token for <b>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</b> with <b>Contents: Read and write</b> — nothing else. Stored only in this browser. Used for admin actions and as an override of the shared key.</p>
+    <div class="modal-actions" style="justify-content:flex-start;margin-top:10px;flex-wrap:wrap">
       <button class="btn btn-small" id="set-test">Test token</button>
+      <button class="btn btn-small" id="set-pubkey" title="Encrypts the token above with the team passphrase and commits it, so everyone with the passphrase can edit">Publish as team edit key</button>
+      ${state.teamToken ? '<button class="btn btn-small" id="set-delkey">Remove team key</button>' : ''}
       <span id="set-test-result" class="hint"></span>
     </div>
     <div class="settings-info">
-      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing, editing, or adding anything with a token commits the change immediately (visible to everyone). Without a token, completions stay on this device and get folded in at the next transcript update — editing needs the token. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
+      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing, editing, or adding anything commits the change immediately (visible to everyone) using the shared team edit key — or your personal token if you've set one. The shared key is stored encrypted with the same passphrase that unlocks this page. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
     </div>
     <div class="modal-actions">
       <button class="btn" id="set-lock">Lock tracker on this device</button>
       <button class="btn btn-primary" id="set-save">Save</button>
     </div>`);
+  root.querySelector('#set-pubkey').addEventListener('click', async (e) => {
+    const out = root.querySelector('#set-test-result');
+    const tok = root.querySelector('#set-pat').value.trim();
+    if (!tok) { out.textContent = 'Paste a token first — it becomes the shared key.'; return; }
+    e.currentTarget.disabled = true;
+    out.textContent = 'Publishing…';
+    try {
+      await publishTeamKey(tok);
+      out.textContent = '✓ Team edit key published — everyone with the passphrase can now edit.';
+      toast('Team editing enabled for everyone.', 'ok');
+    } catch (err) {
+      out.textContent = `✗ ${err.message}`;
+    }
+    e.currentTarget.disabled = false;
+  });
+  root.querySelector('#set-delkey')?.addEventListener('click', async (e) => {
+    const out = root.querySelector('#set-test-result');
+    e.currentTarget.disabled = true;
+    out.textContent = 'Removing…';
+    try {
+      await removeTeamKey();
+      out.textContent = '✓ Team key removed — editing now needs a personal token.';
+      toast('Team edit key removed.', 'warn');
+    } catch (err) {
+      out.textContent = `✗ ${err.message}`;
+      e.currentTarget.disabled = false;
+    }
+  });
   root.querySelector('#set-test').addEventListener('click', async () => {
     const out = root.querySelector('#set-test-result');
     const tok = root.querySelector('#set-pat').value.trim();
@@ -877,6 +974,7 @@ function showApp() {
   $('#topbar').hidden = false;
   $('#app').hidden = false;
   render();
+  loadTeamKey(); // async — edit access appears as soon as the shared key decrypts
 }
 
 function showUnlock(errMsg) {
@@ -961,11 +1059,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const edit = e.target.closest('.ai-edit');
     if (edit) {
       const item = state.data.actionItems.find(i => i.id === edit.dataset.id);
-      if (item && requirePat()) editActionItemModal(item);
+      if (item && requireWrite()) editActionItemModal(item);
       return;
     }
     const add = e.target.closest('.card-add');
-    if (add && requirePat()) addActionItemModal(add.dataset.member);
+    if (add && requireWrite()) addActionItemModal(add.dataset.member);
   });
 
   // Risk + advanced purchase editing
@@ -973,10 +1071,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = e.target.closest('.risk-edit');
     if (!btn) return;
     const risk = state.data.risks.find(r => r.id === btn.dataset.id);
-    if (risk && requirePat()) riskModal(risk);
+    if (risk && requireWrite()) riskModal(risk);
   });
-  $('#btn-aps-edit').addEventListener('click', () => { if (requirePat()) apsEditModal(); });
-  $('#btn-risk-add').addEventListener('click', () => { if (requirePat()) riskModal(null); });
+  $('#btn-aps-edit').addEventListener('click', () => { if (requireWrite()) apsEditModal(); });
+  $('#btn-risk-add').addEventListener('click', () => { if (requireWrite()) riskModal(null); });
 
   // Team jump navigation
   $('#groupnav').addEventListener('click', (e) => {
