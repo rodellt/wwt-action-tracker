@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -389,6 +389,12 @@ function render() {
   renderOpenSummary();
   renderTeam();
   renderFooter();
+  if (present.active) {
+    // Keep the current slide in sync after completions/edits made mid-call.
+    buildSlides();
+    present.idx = Math.min(present.idx, present.slides.length - 1);
+    renderPresent();
+  }
 }
 
 function renderGroupNav() {
@@ -883,6 +889,145 @@ function settingsModal() {
   });
 }
 
+/* ---------------- presentation mode ----------------
+ * Full-screen, one slide per step of the call: welcome → advanced purchase →
+ * risks → each member in call order (PTO members are skipped — they're listed
+ * on the welcome slide) → wrap-up. ✓ buttons stay live so items can be closed
+ * as people report them. */
+const present = { active: false, idx: 0, slides: [] };
+
+function buildSlides() {
+  const slides = [{ type: 'title' }, { type: 'aps' }, { type: 'risks' }];
+  for (const g of state.data.groups) {
+    for (const m of state.data.members.filter(x => x.group === g.id)) {
+      if (activePto(m.id)) continue;
+      slides.push({ type: 'member', memberId: m.id, groupName: g.name });
+    }
+  }
+  slides.push({ type: 'wrap' });
+  present.slides = slides;
+}
+
+function slideLabel(s) {
+  if (!s) return '';
+  if (s.type === 'title') return 'Welcome';
+  if (s.type === 'aps') return 'Advanced Purchase Status';
+  if (s.type === 'risks') return 'Current Risks & Updates';
+  if (s.type === 'wrap') return 'Wrap-up';
+  return memberById(s.memberId)?.name ?? '';
+}
+
+function openCount() {
+  const ld = localDone();
+  return state.data.actionItems.filter(i => i.status === 'open' && !ld[i.id]).length;
+}
+
+function presentSlideHtml(s) {
+  const d = state.data;
+  const mtg = latestMeeting();
+  if (s.type === 'title') {
+    const out = d.members.map(m => ({ m, p: activePto(m.id) })).filter(x => x.p);
+    return `
+      <div class="present-kicker">${esc(d.team)} · Daily Stand-Up</div>
+      <div class="p-title-date">${esc(new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }))}</div>
+      <div class="p-chips">
+        <div class="p-chip"><b>${openCount()}</b> open action items</div>
+        ${out.length ? `<div class="p-chip">Out today: ${esc(out.map(x => `${x.m.name.split(' ')[0]} (back ${fmtDay(x.p.returns, { month: 'short', day: 'numeric' })})`).join(' · '))}</div>` : ''}
+        <div class="p-chip">Last stand-up: <b>${esc(fmtDay(mtg.date, { weekday: 'short', month: 'short', day: 'numeric' }))}</b></div>
+      </div>
+      <p class="present-sub" style="margin-top:28px">Press → or click Next to start with the advanced purchase status.</p>`;
+  }
+  if (s.type === 'aps') {
+    const aps = d.advancedPurchase;
+    return `
+      <div class="present-kicker">First up · Any changes?</div>
+      <div class="present-name">Advanced Purchase Status</div>
+      <p class="present-sub">Verified ${esc(fmtDay(aps.lastVerified))}${aps.lastVerifiedNote ? ` — ${esc(aps.lastVerifiedNote)}` : ''}</p>
+      <div>${aps.stages.map(st => `
+        <div class="p-stage"><span class="p-stage-dot"></span>
+          <div>
+            <div class="p-stage-label">${esc(st.label)}</div>
+            ${st.note ? `<div class="p-stage-note">${esc(st.note)}</div>` : ''}
+          </div>
+        </div>`).join('')}</div>`;
+  }
+  if (s.type === 'risks') {
+    return `
+      <div class="present-kicker">Kate · Any changes?</div>
+      <div class="present-name">Current Risks &amp; Updates</div>
+      <p class="present-sub">${d.risks.length} active</p>
+      <div>${d.risks.map(r => `
+        <div class="p-risk">
+          <div class="p-risk-title">${esc(r.title)}</div>
+          ${r.detail ? `<div class="p-risk-detail">${esc(r.detail)}</div>` : ''}
+          ${r.lastUpdateNote ? `<div class="p-risk-note">${esc(fmtDay(r.lastUpdate, { month: 'short', day: 'numeric' }))} — ${esc(r.lastUpdateNote)}</div>` : ''}
+        </div>`).join('')}</div>`;
+  }
+  if (s.type === 'wrap') {
+    return `
+      <div class="present-kicker">That's the round</div>
+      <div class="present-name">Anything for the group?</div>
+      <div class="p-chips">
+        <div class="p-chip"><b>${openCount()}</b> action items open across the team</div>
+        <div class="p-chip">Today's transcript updates the tracker automatically after the call</div>
+      </div>`;
+  }
+  const m = memberById(s.memberId);
+  const open = openItems(m.id);
+  const { fresh } = splitDone(m.id);
+  const notes = notesFor(m.id);
+  const absent = mtg.absent?.[m.id];
+  return `
+    <div class="present-kicker">${esc(s.groupName)}</div>
+    <div class="present-name">
+      <span class="avatar present-avatar" style="background:hsl(${hueFor(m.id)} 45% 46%)">${esc(initials(m.name))}</span>
+      ${esc(m.name)}
+      ${absent ? `<span class="badge badge-absent">absent ${esc(fmtDay(mtg.date, { month: 'short', day: 'numeric' }))} — ${esc(absent)}</span>` : ''}
+    </div>
+    <div class="present-cols">
+      <div class="present-col">
+        <h3>Open action items (${open.length})</h3>
+        ${(open.length || fresh.length)
+          ? `<ul class="ai-list">${open.map(i => aiItemHtml(i, false)).join('')}${fresh.map(i => aiItemHtml(i, true)).join('')}</ul>`
+          : `<div class="p-empty">Nothing open — all clear.</div>`}
+      </div>
+      <div class="present-col">
+        <h3>Notes — ${notes ? esc(fmtDay(notes.date)) : 'last stand-up'}</h3>
+        ${notes
+          ? `<ul class="p-notes">${notes.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+          : `<div class="p-empty">No notes recorded yet.</div>`}
+      </div>
+    </div>`;
+}
+
+function renderPresent() {
+  const s = present.slides[present.idx];
+  $('#present-slide').innerHTML = `<div class="present-inner">${presentSlideHtml(s)}</div>`;
+  $('#present-slide').scrollTop = 0;
+  const next = present.slides[present.idx + 1];
+  $('#present-progress').textContent = `${present.idx + 1} / ${present.slides.length}`;
+  $('#present-next-label').textContent = next ? `Up next: ${slideLabel(next)}` : 'Last slide — Esc to exit';
+  $('#present-prev').disabled = present.idx === 0;
+  $('#present-next').disabled = present.idx === present.slides.length - 1;
+}
+
+function openPresent() {
+  present.active = true;
+  buildSlides();
+  present.idx = 0;
+  document.body.classList.add('presenting');
+  $('#present').hidden = false;
+  renderPresent();
+  document.activeElement?.blur?.();
+}
+function closePresent() {
+  present.active = false;
+  document.body.classList.remove('presenting');
+  $('#present').hidden = true;
+}
+function presentNext() { if (present.idx < present.slides.length - 1) { present.idx++; renderPresent(); } }
+function presentPrev() { if (present.idx > 0) { present.idx--; renderPresent(); } }
+
 /* ---------------- boot flow ---------------- */
 function applyTheme() {
   document.documentElement.dataset.theme = getLS(LS.theme, 'auto');
@@ -1042,7 +1187,44 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('resize', syncStickyHeight);
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  // Presentation mode
+  $('#btn-present').addEventListener('click', openPresent);
+  $('#present-exit').addEventListener('click', closePresent);
+  $('#present-prev').addEventListener('click', presentPrev);
+  $('#present-next').addEventListener('click', presentNext);
+  // Slides keep live ✓ (complete/reopen) and click-to-expand details.
+  $('#present-slide').addEventListener('click', (e) => {
+    const chk = e.target.closest('.ai-check');
+    if (chk) {
+      const item = state.data.actionItems.find(i => i.id === chk.dataset.id);
+      if (!item) return;
+      if (chk.dataset.action === 'complete') confirmCompleteModal(item);
+      else confirmReopenModal(item, !!localDone()[item.id]);
+      return;
+    }
+    const txt = e.target.closest('.ai-text.has-detail');
+    if (txt) {
+      const li = txt.closest('.ai-item');
+      const id = li.dataset.id;
+      expandedItems.has(id) ? expandedItems.delete(id) : expandedItems.add(id);
+      li.classList.toggle('expanded');
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (document.querySelector('#modal-root .modal')) { closeModal(); return; }
+      if (present.active) closePresent();
+      return;
+    }
+    if (!present.active) return;
+    if (document.querySelector('#modal-root .modal')) return;
+    if (e.target.matches?.('input, textarea, select')) return;
+    if (e.key === ' ' && e.target.closest?.('button')) return; // let focused buttons take Space
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); presentNext(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); presentPrev(); }
+    else if (e.key === 'Home') { present.idx = 0; renderPresent(); }
+  });
 
   // Gentle auto-refresh while the tab is visible (same-origin fetch — no rate limits).
   setInterval(() => { if (!document.hidden && state.data) refresh(false); }, 120000);

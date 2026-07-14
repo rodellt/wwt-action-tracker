@@ -417,6 +417,83 @@ details.completed-fold .ai-list { margin-top: 8px; }
   display: flex; gap: 8px; flex-wrap: wrap;
 }
 
+/* ============ Presentation mode ============ */
+body.presenting { overflow: hidden; }
+#present {
+  position: fixed; inset: 0; z-index: 55;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+}
+.present-head {
+  flex: none;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px clamp(18px, 3vw, 30px);
+  color: var(--text-3); font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.present-brand { display: flex; gap: 9px; align-items: center; font-weight: 700; color: var(--text-2); }
+.present-brand .brand-mark { width: 26px; height: 26px; font-size: 14px; border-radius: 7px; }
+.present-head-right { display: flex; gap: 12px; align-items: center; }
+.present-body { flex: 1; overflow-y: auto; padding: clamp(18px, 3.5vh, 40px) clamp(20px, 5vw, 70px); }
+.present-inner { max-width: 1160px; margin: 0 auto; }
+.present-kicker {
+  font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 750; margin-bottom: 10px;
+}
+.present-name {
+  font-size: clamp(30px, 4.2vw, 46px); font-weight: 750; letter-spacing: -.01em;
+  line-height: 1.1; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.present-name .badge { font-size: 13px; padding: 5px 13px; }
+.present-avatar { width: 52px; height: 52px; font-size: 19px; }
+.present-sub { color: var(--text-2); font-size: 15.5px; margin: 0 0 26px; }
+.present-cols { display: grid; grid-template-columns: 1.15fr .85fr; gap: clamp(24px, 4vw, 56px); margin-top: 24px; }
+@media (max-width: 900px) { .present-cols { grid-template-columns: 1fr; } }
+.present-col h3 {
+  font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-3); margin: 0 0 14px; font-weight: 700;
+}
+#present .ai-list { gap: 10px; }
+#present .ai-item { padding: 12px 14px; border-radius: 12px; }
+#present .ai-text { font-size: 17.5px; }
+#present .ai-tag { font-size: 12.5px; }
+#present .ai-detail { font-size: 14.5px; }
+#present .ai-meta { font-size: 12.5px; }
+#present .ai-edit { display: none; }
+#present .ai-check { width: 24px; height: 24px; border-radius: 8px; font-size: 16px; margin-top: 2px; }
+.p-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
+.p-notes li { font-size: 18px; line-height: 1.5; padding-left: 20px; position: relative; }
+.p-notes li::before { content: "•"; position: absolute; left: 2px; color: var(--accent); }
+.p-empty { color: var(--text-3); font-size: 16.5px; font-style: italic; }
+.p-title-date { font-size: clamp(38px, 6vw, 64px); font-weight: 800; letter-spacing: -.02em; line-height: 1.05; margin-bottom: 8px; }
+.p-chips { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+.p-chip {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 13px; padding: 13px 19px; font-size: 15.5px;
+  box-shadow: var(--shadow);
+}
+.p-chip b { color: var(--accent); }
+.p-stage { display: flex; gap: 15px; padding: 17px 0; border-top: 1px solid var(--border); }
+.p-stage:first-child { border-top: none; }
+.p-stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-top: 11px; flex: none; }
+.p-stage-label { font-size: 22px; font-weight: 650; }
+.p-stage-note { font-size: 15.5px; color: var(--text-2); margin-top: 3px; max-width: 860px; }
+.p-risk { padding: 15px 0; border-top: 1px solid var(--border); }
+.p-risk:first-child { border-top: none; }
+.p-risk-title { font-size: 21px; font-weight: 650; }
+.p-risk-detail { font-size: 15.5px; color: var(--text-2); margin-top: 4px; max-width: 900px; }
+.p-risk-note { font-size: 13.5px; color: var(--text-3); margin-top: 4px; }
+.present-foot {
+  flex: none;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px clamp(18px, 3vw, 30px) 18px;
+  color: var(--text-3); font-size: 13.5px;
+  border-top: 1px solid var(--border);
+}
+.present-nav { display: flex; gap: 9px; }
+.present-nav .btn { font-size: 15px; padding: 9px 20px; }
+
 @media (max-width: 640px) {
   .topbar-row { flex-wrap: wrap; }
   .member-grid { grid-template-columns: 1fr; }
