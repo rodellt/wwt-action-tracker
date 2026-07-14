@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -941,7 +941,7 @@ function presentSlideHtml(s) {
     const aps = d.advancedPurchase;
     return `
       <div class="present-kicker">First up · Any changes?</div>
-      <div class="present-name">Advanced Purchase Status</div>
+      <div class="present-name">Advanced Purchase Status <button class="p-add" id="p-aps-edit">✎ Edit</button></div>
       <p class="present-sub">Verified ${esc(fmtDay(aps.lastVerified))}${aps.lastVerifiedNote ? ` — ${esc(aps.lastVerifiedNote)}` : ''}</p>
       <div>${aps.stages.map(st => `
         <div class="p-stage"><span class="p-stage-dot"></span>
@@ -954,11 +954,14 @@ function presentSlideHtml(s) {
   if (s.type === 'risks') {
     return `
       <div class="present-kicker">Kate · Any changes?</div>
-      <div class="present-name">Current Risks &amp; Updates</div>
+      <div class="present-name">Current Risks &amp; Updates <button class="p-add" id="p-risk-add">＋ Add risk</button></div>
       <p class="present-sub">${d.risks.length} active</p>
       <div>${d.risks.map(r => `
         <div class="p-risk">
-          <div class="p-risk-title">${esc(r.title)}</div>
+          <div class="p-risk-row">
+            <div class="p-risk-title">${esc(r.title)}</div>
+            <button class="risk-edit" data-id="${esc(r.id)}" title="Edit this risk">✎</button>
+          </div>
           ${r.detail ? `<div class="p-risk-detail">${esc(r.detail)}</div>` : ''}
           ${r.lastUpdateNote ? `<div class="p-risk-note">${esc(fmtDay(r.lastUpdate, { month: 'short', day: 'numeric' }))} — ${esc(r.lastUpdateNote)}</div>` : ''}
         </div>`).join('')}</div>`;
@@ -986,7 +989,7 @@ function presentSlideHtml(s) {
     </div>
     <div class="present-cols">
       <div class="present-col">
-        <h3>Open action items (${open.length})</h3>
+        <h3>Open action items (${open.length}) <button class="p-add" data-member="${esc(m.id)}">＋ Add</button></h3>
         ${(open.length || fresh.length)
           ? `<ul class="ai-list">${open.map(i => aiItemHtml(i, false)).join('')}${fresh.map(i => aiItemHtml(i, true)).join('')}</ul>`
           : `<div class="p-empty">Nothing open — all clear.</div>`}
@@ -1192,7 +1195,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#present-exit').addEventListener('click', closePresent);
   $('#present-prev').addEventListener('click', presentPrev);
   $('#present-next').addEventListener('click', presentNext);
-  // Slides keep live ✓ (complete/reopen) and click-to-expand details.
+  // Slides stay fully interactive: complete/reopen, edit, add, expand details.
   $('#present-slide').addEventListener('click', (e) => {
     const chk = e.target.closest('.ai-check');
     if (chk) {
@@ -1200,6 +1203,31 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!item) return;
       if (chk.dataset.action === 'complete') confirmCompleteModal(item);
       else confirmReopenModal(item, !!localDone()[item.id]);
+      return;
+    }
+    const edit = e.target.closest('.ai-edit');
+    if (edit) {
+      const item = state.data.actionItems.find(i => i.id === edit.dataset.id);
+      if (item && requireWrite()) editActionItemModal(item);
+      return;
+    }
+    const addMember = e.target.closest('.p-add[data-member]');
+    if (addMember) {
+      if (requireWrite()) addActionItemModal(addMember.dataset.member);
+      return;
+    }
+    if (e.target.closest('#p-aps-edit')) {
+      if (requireWrite()) apsEditModal();
+      return;
+    }
+    if (e.target.closest('#p-risk-add')) {
+      if (requireWrite()) riskModal(null);
+      return;
+    }
+    const riskEdit = e.target.closest('.risk-edit');
+    if (riskEdit) {
+      const risk = state.data.risks.find(r => r.id === riskEdit.dataset.id);
+      if (risk && requireWrite()) riskModal(risk);
       return;
     }
     const txt = e.target.closest('.ai-text.has-detail');
