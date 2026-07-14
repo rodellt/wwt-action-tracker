@@ -16,5 +16,7 @@ Follow the "THE DAILY WORKFLOW" section of CLAUDE.md in the repo root, step by s
    (`Stand-up YYYY-MM-DD`), `git pull --rebase`, `git push`.
 5. Report: new items, completed items, APO/risk/PTO changes, ambiguities.
 
-If no transcript path was given, ask for it (or check ~/Downloads for a new
-`Cox HPT*.docx` newer than the last processed meeting and confirm before using it).
+If no transcript path was given: first try the Microsoft 365 connector
+(calendar event → `meetingTranscriptUrl` → WebVTT transcript — see CLAUDE.md
+"SCHEDULED DAILY RUN"), then `node scripts/find-transcript.mjs` for ~/Downloads.
+Ask Tyler only if both come up empty.

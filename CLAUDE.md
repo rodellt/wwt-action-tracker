@@ -55,22 +55,28 @@ it in the browser with the team passphrase.
 ## SCHEDULED DAILY RUN (weekdays 9:00 AM Central)
 
 A local scheduled task ("hpt-daily-update") runs Claude Code every weekday at
-9:00 AM Central (the stand-up ends ~8:30). That session should:
+9:00 AM Central (the stand-up runs 8:00–8:30). Transcript sources, in order:
 
-1. `node scripts/find-transcript.mjs` — lists transcripts in ~/Downloads (and any
-   extra dirs passed) whose INTERNAL meeting date is newer than the last processed
-   meeting. Run `git pull` + `node scripts/sync.mjs` first so the comparison is fresh.
-2. If found: run THE DAILY WORKFLOW (below) for each, oldest first.
-3. If none: re-check every ~5 minutes until 10:00 AM, then send a push
-   notification asking Tyler to download the transcript (Teams → the meeting →
-   Recap → download transcript .docx → Downloads folder) and stop. A no-meeting
-   day (holiday) is normal — just say so in the notification.
-4. Finish with a push notification summarizing: new/completed action items,
-   APO/risk/PTO changes, and anything ambiguous.
+1. **Microsoft 365 connector (primary, zero-click).** `outlook_calendar_search`
+   for today's "Cox HPT" event (organizer Katelyn.Mentzer@wwt.com) →
+   `read_resource` the event URI → take its `meetingTranscriptUrl` field
+   verbatim → `read_resource` it. Returns the meeting's WebVTT transcript
+   (`<v Lastname, Firstname>text</v>` cues) — same content as the .docx
+   download; process it with THE DAILY WORKFLOW (meeting date = the event date;
+   confirm via the transcript's createdDateTime). Transcript may take a few
+   minutes after the call to appear — retry every ~5 min until 10:00 AM.
+   Read-only: never send mail / create events / modify anything via the connector.
+2. **Downloads fallback.** `node scripts/find-transcript.mjs` — lists .docx
+   transcripts in ~/Downloads whose INTERNAL meeting date is newer than the last
+   processed meeting (run `git pull` + `node scripts/sync.mjs` first so the
+   comparison is fresh). Used when the connector is disconnected or erroring;
+   in that case also tell Tyler to reconnect it (Settings → Connectors).
 
-Transcript supply: Tyler either downloads the .docx after the call (lands in
-Downloads) or a Power Automate flow deposits it into a OneDrive-synced folder —
-if such a folder exists, pass it to find-transcript.mjs as an extra dir.
+Catch-up: if more than one weekday is missing, fetch each missed day's
+occurrence the same way, process oldest → newest, and never re-process a date
+already in `meetings[]`. No "Cox HPT" event on the calendar = holiday, just say
+so. Finish every run with a push notification: new/completed action items,
+APO/risk/PTO changes, and anything ambiguous.
 
 ## Conventions & gotchas
 
