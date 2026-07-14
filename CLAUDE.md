@@ -103,10 +103,12 @@ APO/risk/PTO changes, and anything ambiguous.
 - Passphrase lives in `.secrets/passphrase.txt`. Never print it into committed files.
 - `data/edit-key.enc.json` (committed) is the **shared team edit key**: a fine-grained
   GitHub token encrypted with the team passphrase. The page decrypts it after unlock
-  so anyone with the passphrase can edit — published/removed from the page's Settings
-  by an admin. The daily pipeline never needs it (git push uses local creds) — do not
-  decrypt, print, or delete it. If the passphrase is ever rotated, the key must be
-  re-published from Settings afterward.
+  so anyone with the passphrase can edit — the page itself has NO token UI (per Tyler:
+  no token system visible to users). Publish/rotate/remove it only via
+  `node scripts/publish-edit-key.mjs [--remove]` (Tyler pastes the token into his own
+  terminal; never handle the token value in a session). The daily pipeline never needs
+  it — do not decrypt, print, or delete it. If the passphrase rotates, the key must be
+  re-published afterward.
 - The site is public at https://rodellt.github.io/wwt-action-tracker/ — the repo is
   public, only the encrypted blob is exposed. Keep every meeting detail inside
   `data/data.json` → encrypted envelope, never in committed HTML/JS/README.

@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -189,42 +189,8 @@ async function loadTeamKey() {
   state.teamToken = null;
   return false;
 }
-async function publishTeamKey(token) {
-  const envObj = await encryptEnvelope(
-    { token, created: new Date().toISOString(), by: editorName(), lastUpdated: new Date().toISOString() },
-    state.passphrase
-  );
-  const url = contentsUrl(CONFIG.editKeyPath);
-  let sha;
-  const res = await fetch(`${url}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
-  if (res.ok) sha = (await res.json()).sha;
-  const put = await fetch(url, {
-    method: 'PUT',
-    headers: ghHeaders(token),
-    body: JSON.stringify({
-      message: `Publish team edit key (${editorName()})`,
-      content: bytesToB64(te.encode(JSON.stringify(envObj, null, 2) + '\n')),
-      ...(sha ? { sha } : {}),
-      branch: CONFIG.branch,
-    }),
-  });
-  if (!put.ok) throw new Error(`Publishing the team key failed (${put.status}) — check the token has Contents write access.`);
-  state.teamToken = token;
-}
-async function removeTeamKey() {
-  const token = effectiveToken();
-  const url = contentsUrl(CONFIG.editKeyPath);
-  const res = await fetch(`${url}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(token) });
-  if (!res.ok) throw new Error('No published team key found.');
-  const info = await res.json();
-  const del = await fetch(url, {
-    method: 'DELETE',
-    headers: ghHeaders(token),
-    body: JSON.stringify({ message: 'Remove team edit key', sha: info.sha, branch: CONFIG.branch }),
-  });
-  if (!del.ok) throw new Error(`Removing the team key failed (${del.status}).`);
-  state.teamToken = null;
-}
+// Publishing / removing the key is done from a terminal:
+//   node scripts/publish-edit-key.mjs [--remove]
 async function fetchEnvelope() {
   const pat = getLS(LS.pat);
   const failures = [];
@@ -247,7 +213,7 @@ async function remoteMutate(mutator, message) {
   if (!pat) throw new Error('no-token');
   for (let attempt = 1; attempt <= 3; attempt++) {
     const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(pat) });
-    if (res.status === 401 || res.status === 403) throw new Error('GitHub token was rejected — check it in Settings.');
+    if (res.status === 401 || res.status === 403) throw new Error('The tracker’s edit key was rejected — it may have expired. Tell Tyler.');
     if (!res.ok) throw new Error(`GitHub read failed (${res.status})`);
     const info = await res.json();
     const env = JSON.parse(td.decode(b64ToBytes(info.content)));
@@ -320,7 +286,7 @@ function splitDone(memberId) {
 /* ---------------- editing helpers ---------------- */
 function requireWrite() {
   if (effectiveToken()) return true;
-  toast('Editing isn’t enabled on this page yet — no team edit key found. Details in Settings (⚙).', 'warn');
+  toast('Shared editing isn’t set up on this tracker yet — ask Tyler (it’s a one-time step).', 'warn');
   return false;
 }
 function editorName() { return getLS(LS.name) || 'web'; }
@@ -360,7 +326,7 @@ async function saveViaMutate(btn, mutator, message, okMsg) {
     toast(okMsg, 'ok');
   } catch (err) {
     btn.disabled = false;
-    toast(err.message === 'no-token' ? 'Add a GitHub token in Settings first.' : err.message, 'warn');
+    toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
   }
 }
 
@@ -608,7 +574,7 @@ function confirmCompleteModal(item) {
         toast('Completed — saved for the whole team.', 'ok');
       } catch (err) {
         btn.disabled = false;
-        toast(err.message === 'no-token' ? 'Add a GitHub token in Settings first.' : err.message, 'warn');
+        toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
       }
     } else {
       const ld = localDone();
@@ -650,7 +616,7 @@ function confirmReopenModal(item, isLocal) {
       toast('Reopened for the whole team.', 'ok');
     } catch (err) {
       e.currentTarget.disabled = false;
-      toast(err.message === 'no-token' ? 'A GitHub token (Settings) is needed to reopen shared items.' : err.message, 'warn');
+      toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
     }
   });
 }
@@ -859,77 +825,23 @@ function historyModal() {
 }
 
 function settingsModal() {
-  const pat = getLS(LS.pat) ?? '';
   const name = getLS(LS.name) ?? '';
   const root = openModal(`
     <div class="modal-head"><h2>Settings</h2><button class="modal-close" data-close>×</button></div>
     <label for="set-name">Your name (shown on items you complete or edit)</label>
     <input id="set-name" type="text" value="${esc(name)}" placeholder="e.g. Tyler">
-    <label>Team editing</label>
-    <p class="hint" id="teamkey-status" style="margin-top:0">${state.teamToken
-      ? '✓ <b>Enabled for everyone.</b> A shared edit key is published — anyone who unlocks this page can complete, edit, and add things. No personal token needed.'
-      : 'Not enabled — no shared edit key is published. An admin with a GitHub token can publish one below; until then, editing needs a personal token.'}</p>
-    <label for="set-pat">Personal GitHub token (admin — optional when team editing is enabled)</label>
-    <input id="set-pat" type="password" value="${esc(pat)}" placeholder="github_pat_… or ghp_…" autocomplete="off">
-    <p class="hint">Fine-grained personal access token for <b>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</b> with <b>Contents: Read and write</b> — nothing else. Stored only in this browser. Used for admin actions and as an override of the shared key.</p>
-    <div class="modal-actions" style="justify-content:flex-start;margin-top:10px;flex-wrap:wrap">
-      <button class="btn btn-small" id="set-test">Test token</button>
-      <button class="btn btn-small" id="set-pubkey" title="Encrypts the token above with the team passphrase and commits it, so everyone with the passphrase can edit">Publish as team edit key</button>
-      ${state.teamToken ? '<button class="btn btn-small" id="set-delkey">Remove team key</button>' : ''}
-      <span id="set-test-result" class="hint"></span>
-    </div>
+    <p class="hint" style="margin-top:10px">${state.teamToken
+      ? '✓ <b>Editing is on.</b> Anyone who unlocks this page can complete, edit, and add items — changes save for everyone automatically.'
+      : 'Shared editing isn’t set up yet — completing items still works on this device, and everything syncs with the next morning’s update.'}</p>
     <div class="settings-info">
-      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing, editing, or adding anything commits the change immediately (visible to everyone) using the shared team edit key — or your personal token if you've set one. The shared key is stored encrypted with the same passphrase that unlocks this page. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
+      <b>How it works.</b> The tracker is a single encrypted file on GitHub. Unlocking the page with the team passphrase is all you need — completes, edits, and new items save for the whole team instantly. Items closed verbally on the stand-up are picked up from the transcript each morning.
     </div>
     <div class="modal-actions">
       <button class="btn" id="set-lock">Lock tracker on this device</button>
       <button class="btn btn-primary" id="set-save">Save</button>
-    </div>`);
-  root.querySelector('#set-pubkey').addEventListener('click', async (e) => {
-    const out = root.querySelector('#set-test-result');
-    const tok = root.querySelector('#set-pat').value.trim();
-    if (!tok) { out.textContent = 'Paste a token first — it becomes the shared key.'; return; }
-    e.currentTarget.disabled = true;
-    out.textContent = 'Publishing…';
-    try {
-      await publishTeamKey(tok);
-      out.textContent = '✓ Team edit key published — everyone with the passphrase can now edit.';
-      toast('Team editing enabled for everyone.', 'ok');
-    } catch (err) {
-      out.textContent = `✗ ${err.message}`;
-    }
-    e.currentTarget.disabled = false;
-  });
-  root.querySelector('#set-delkey')?.addEventListener('click', async (e) => {
-    const out = root.querySelector('#set-test-result');
-    e.currentTarget.disabled = true;
-    out.textContent = 'Removing…';
-    try {
-      await removeTeamKey();
-      out.textContent = '✓ Team key removed — editing now needs a personal token.';
-      toast('Team edit key removed.', 'warn');
-    } catch (err) {
-      out.textContent = `✗ ${err.message}`;
-      e.currentTarget.disabled = false;
-    }
-  });
-  root.querySelector('#set-test').addEventListener('click', async () => {
-    const out = root.querySelector('#set-test-result');
-    const tok = root.querySelector('#set-pat').value.trim();
-    if (!tok) { out.textContent = 'Enter a token first.'; return; }
-    out.textContent = 'Testing…';
-    try {
-      const r = await fetch(`https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}`, { headers: ghHeaders(tok) });
-      if (!r.ok) throw new Error(String(r.status));
-      const j = await r.json();
-      out.textContent = j.permissions?.push ? '✓ Token works (write access confirmed).' : '⚠ Token can read but not write this repo.';
-    } catch {
-      out.textContent = '✗ Token was rejected.';
-    }
-  });
+    </div>`, true);
   root.querySelector('#set-save').addEventListener('click', () => {
     setLS(LS.name, root.querySelector('#set-name').value.trim() || null);
-    setLS(LS.pat, root.querySelector('#set-pat').value.trim() || null);
     closeModal();
     toast('Settings saved.', 'ok');
   });
