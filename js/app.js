@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -915,16 +915,15 @@ function settingsModal() {
 
 /* ---------------- presentation mode ----------------
  * Full-screen, one slide per step of the call: welcome → advanced purchase →
- * risks → each member in call order (PTO members are skipped — they're listed
- * on the welcome slide) → wrap-up. ✓ buttons stay live so items can be closed
- * as people report them. */
+ * risks → every member in call order (PTO/OOO members included, clearly
+ * badged) → wrap-up. ✓ buttons stay live so items can be closed as people
+ * report them. */
 const present = { active: false, idx: 0, slides: [] };
 
 function buildSlides() {
   const slides = [{ type: 'title' }, { type: 'aps' }, { type: 'risks' }];
   for (const g of state.data.groups) {
     for (const m of state.data.members.filter(x => x.group === g.id)) {
-      if (activePto(m.id)) continue;
       slides.push({ type: 'member', memberId: m.id, groupName: g.name });
     }
   }
@@ -1004,13 +1003,17 @@ function presentSlideHtml(s) {
   const { fresh } = splitDone(m.id);
   const notes = notesFor(m.id);
   const absent = mtg.absent?.[m.id];
+  const pto = activePto(m.id);
   return `
     <div class="present-kicker">${esc(s.groupName)}</div>
     <div class="present-name">
       <span class="avatar present-avatar" style="background:hsl(${hueFor(m.id)} 45% 46%)">${esc(initials(m.name))}</span>
       ${esc(m.name)}
-      ${absent ? `<span class="badge badge-absent">absent ${esc(fmtDay(mtg.date, { month: 'short', day: 'numeric' }))} — ${esc(absent)}</span>` : ''}
+      ${pto
+        ? `<span class="badge badge-ooo">${esc(pto.type)} · back ${esc(fmtDay(pto.returns, { month: 'short', day: 'numeric' }))}</span>`
+        : (absent ? `<span class="badge badge-absent">absent ${esc(fmtDay(mtg.date, { month: 'short', day: 'numeric' }))} — ${esc(absent)}</span>` : '')}
     </div>
+    ${pto?.note ? `<p class="present-sub" style="margin-bottom:0">${esc(pto.note)}</p>` : ''}
     <div class="present-cols">
       <div class="present-col">
         <h3>Open action items (${open.length}) <button class="p-add" data-member="${esc(m.id)}">＋ Add</button></h3>
