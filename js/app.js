@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -374,6 +374,11 @@ function syncStickyHeight() {
 }
 
 /* ---------------- rendering ---------------- */
+// Cards render compact: item details and long notes are collapsed until
+// clicked. These sets keep what the user expanded open across re-renders.
+const expandedItems = new Set();
+const expandedNotes = new Set();
+
 function render() {
   sortMeetings();
   renderTopbar();
@@ -463,16 +468,29 @@ function renderOpenSummary() {
 
 function aiItemHtml(item, done) {
   const c = item.completed;
+  const age = ageDays(item.created);
+  // Compact row: just the title plus a tiny age/status tag. The full meta line
+  // and any detail/completion note live behind the chevron.
+  const tag = done
+    ? `${c?.method === 'verbal' ? '🗣' : '✓'} ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${item._local ? ' <span class="local-flag">local</span>' : ''}`
+    : `<span class="${age >= 3 ? 'age-hot' : ''}">${age}d</span>`;
   const meta = done
-    ? `Completed ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${c?.method ? ` · ${c.method === 'verbal' ? '🗣 verbal (from transcript)' : '✓ manual'}` : ''}${item._local ? ' · <span class="local-flag">this device only</span>' : ''}${c?.note ? ` · ${esc(c.note)}` : ''}`
-    : `Raised ${fmtDay(item.created, { month: 'short', day: 'numeric' })}${ageDays(item.created) >= 3 ? ` · <span class="age-hot">${ageDays(item.created)}d old</span>` : ` · ${ageDays(item.created)}d`}${item.source ? ` · ${esc(item.source)}` : ''}`;
+    ? `Completed ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${c?.method ? ` · ${c.method === 'verbal' ? '🗣 verbal (from transcript)' : '✓ manual'}` : ''}${item._local ? ' · <span class="local-flag">this device only</span>' : ''}`
+    : `Raised ${fmtDay(item.created, { month: 'short', day: 'numeric' })}${item.source ? ` · ${esc(item.source)}` : ''}`;
+  const extra = (done ? [c?.note, item.detail] : [item.detail]).filter(Boolean);
   return `
-    <li class="ai-item ${done ? 'done' : ''}" data-id="${esc(item.id)}">
+    <li class="ai-item ${done ? 'done' : ''} ${expandedItems.has(item.id) ? 'expanded' : ''}" data-id="${esc(item.id)}">
       <button class="ai-check" data-action="${done ? 'reopen' : 'complete'}" data-id="${esc(item.id)}" title="${done ? 'Reopen this item' : 'Mark complete'}">✓</button>
-      <div class="ai-text">
-        <div class="ai-title">${esc(item.text)}</div>
-        ${item.detail ? `<div class="ai-detail">${esc(item.detail)}</div>` : ''}
-        <div class="ai-meta">${meta}</div>
+      <div class="ai-text has-detail" title="Click for details">
+        <div class="ai-title">
+          <span class="ai-chev">▸</span>
+          <span class="ai-title-text">${esc(item.text)}</span>
+          <span class="ai-tag">${tag}</span>
+        </div>
+        <div class="ai-detail">
+          <div class="ai-meta">${meta}</div>
+          ${extra.map(p => `<div>${esc(p)}</div>`).join('')}
+        </div>
       </div>
       ${done ? '' : `<button class="ai-edit" data-id="${esc(item.id)}" title="Edit this item">✎</button>`}
     </li>`;
@@ -515,7 +533,11 @@ function renderTeam() {
             ${notes ? `<span class="when">${notes.isLatest ? '' : 'last update — '}${fmtDay(notes.date)}</span>` : ''}
           </div>
           ${notes
-            ? `<ul class="notes-list">${notes.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+            ? `<ul class="notes-list">${notes.notes.map((n, idx) => {
+                const key = `${m.id}:${notes.date}:${idx}`;
+                const clampable = n.length > 140;
+                return `<li class="${clampable ? 'clampable' : ''} ${expandedNotes.has(key) ? 'expanded' : ''}" data-nkey="${esc(key)}"${clampable ? ' title="Click to expand"' : ''}>${esc(n)}</li>`;
+              }).join('')}</ul>`
             : `<div class="notes-empty">No notes yet.</div>`}
           ${absent && notes && !notes.isLatest ? `<div class="notes-empty" style="margin-top:4px">${fmtDay(mtg.date, { month: 'short', day: 'numeric' })}: ${esc(absent)}</div>` : ''}
         </div>
@@ -984,7 +1006,22 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     const add = e.target.closest('.card-add');
-    if (add && requireWrite()) addActionItemModal(add.dataset.member);
+    if (add && requireWrite()) { addActionItemModal(add.dataset.member); return; }
+    // Compact-layout toggles: expand/collapse item details and long notes
+    const txt = e.target.closest('.ai-text.has-detail');
+    if (txt) {
+      const li = txt.closest('.ai-item');
+      const id = li.dataset.id;
+      expandedItems.has(id) ? expandedItems.delete(id) : expandedItems.add(id);
+      li.classList.toggle('expanded');
+      return;
+    }
+    const noteLi = e.target.closest('.notes-list li.clampable');
+    if (noteLi) {
+      const key = noteLi.dataset.nkey;
+      expandedNotes.has(key) ? expandedNotes.delete(key) : expandedNotes.add(key);
+      noteLi.classList.toggle('expanded');
+    }
   });
 
   // Risk + advanced purchase editing
