@@ -93,6 +93,12 @@ APO/risk/PTO changes, and anything ambiguous.
   Tori, Theresa, Jackson). Tyler facilitates.
 - Assign each action item to exactly one owner (the person who said they'd do it, or
   who it was handed to). Joint work: pick the primary, name the others in `detail`.
+- The webpage (v1.1+) can add/edit/delete action items, risks, and the advanced
+  purchase stages. Web-created items use ids `ai-YYYYMMDD-wNN` with
+  `source: "web — <name>"` — never renumber them, and keep numbering transcript
+  items in the separate `ai-YYYYMMDD-NN` space. Web risk edits stamp `lastUpdate`;
+  web APS saves stamp `lastVerified`. Always give new risks an `id` slug
+  (`risk-...`) — the web edit flow finds risks by id (title match is only a fallback).
 - Do not commit transcripts, the Excel file, `data/data.json`, or `.secrets/`.
 - Passphrase lives in `.secrets/passphrase.txt`. Never print it into committed files.
 - The site is public at https://rodellt.github.io/wwt-action-tracker/ — the repo is

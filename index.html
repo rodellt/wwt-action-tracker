@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Cox HPT — Daily Stand-Up Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c9243f'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/styles.css?v=1.0.2">
+<link rel="stylesheet" href="css/styles.css?v=1.1.0">
 <script>
 /* Boot watchdog (ES5 on purpose): if the app hasn't come up shortly after load,
    replace the spinner with a diagnostic message instead of hanging forever. */
@@ -63,20 +63,23 @@
 </div>
 
 <header class="topbar" id="topbar" hidden>
-  <div class="brand">
-    <span class="brand-mark">✓</span>
-    <div>
-      <div class="brand-title">Cox HPT</div>
-      <div class="brand-sub">Daily Stand-Up Tracker</div>
+  <div class="topbar-row">
+    <div class="brand">
+      <span class="brand-mark">✓</span>
+      <div>
+        <div class="brand-title">Cox HPT</div>
+        <div class="brand-sub">Daily Stand-Up Tracker</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="asof" class="asof" title="When the tracker data was last updated"></span>
+      <button id="btn-sync" class="btn btn-ghost" title="Fetch the latest data">⟳ Sync</button>
+      <button id="btn-history" class="btn btn-ghost">Meeting history</button>
+      <button id="btn-theme" class="btn btn-icon" title="Theme (auto → light → dark)">◐</button>
+      <button id="btn-settings" class="btn btn-icon" title="Settings">⚙</button>
     </div>
   </div>
-  <div class="topbar-actions">
-    <span id="asof" class="asof" title="When the tracker data was last updated"></span>
-    <button id="btn-sync" class="btn btn-ghost" title="Fetch the latest data">⟳ Sync</button>
-    <button id="btn-history" class="btn btn-ghost">Meeting history</button>
-    <button id="btn-theme" class="btn btn-icon" title="Theme (auto → light → dark)">◐</button>
-    <button id="btn-settings" class="btn btn-icon" title="Settings">⚙</button>
-  </div>
+  <nav id="groupnav" class="groupnav" aria-label="Jump to team"></nav>
 </header>
 
 <main id="app" hidden>
@@ -87,6 +90,7 @@
       <div class="card-head">
         <h2>Advanced Purchase Status</h2>
         <span class="chip" id="aps-verified"></span>
+        <button id="btn-aps-edit" class="btn btn-small btn-ghost" title="Edit the purchase status">✎ Edit</button>
       </div>
       <div id="aps-body"></div>
     </div>
@@ -94,6 +98,7 @@
       <div class="card-head">
         <h2>Current Risks &amp; Updates</h2>
         <span class="chip" id="risks-count"></span>
+        <button id="btn-risk-add" class="btn btn-small btn-ghost" title="Add a risk">＋ Add</button>
       </div>
       <ul id="risks-body" class="risk-list"></ul>
     </div>
@@ -108,13 +113,13 @@
     <span>·</span>
     <a id="footer-repo" href="#" target="_blank" rel="noopener">GitHub repo</a>
     <span>·</span>
-    <span>Updated after each stand-up from the meeting transcript. Mark items complete here, or say it on the call and it'll be closed out with the next update.</span>
+    <span>Updated after each stand-up from the meeting transcript. Complete, edit, or add items right here — or say it on the call and it'll be picked up with the next update.</span>
   </footer>
 </main>
 
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 
-<script src="js/app.js?v=1.0.2"></script>
+<script src="js/app.js?v=1.1.0"></script>
 </body>
 </html>

@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.1.0';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -243,17 +243,121 @@ function doneItems(memberId) {
     .map(i => ({ ...i, _local: true, completed: ld[i.id] }));
   return [...local, ...remote].sort((a, b) => (b.completed?.date ?? '').localeCompare(a.completed?.date ?? ''));
 }
+// Completions on/after the latest processed meeting stay visible inline until the
+// next day's call is processed; everything older lives in the collapsed fold.
+function splitDone(memberId) {
+  const cut = latestMeeting()?.date ?? '';
+  const all = doneItems(memberId);
+  return {
+    fresh: all.filter(i => (i.completed?.date ?? '') >= cut),
+    folded: all.filter(i => (i.completed?.date ?? '') < cut),
+  };
+}
+
+/* ---------------- editing helpers ---------------- */
+function requirePat() {
+  if (getLS(LS.pat)) return true;
+  toast('Editing needs a GitHub token — add one in Settings (⚙).', 'warn');
+  return false;
+}
+function editorName() { return getLS(LS.name) || 'web'; }
+
+// Id generators run INSIDE mutators so sha-conflict retries recompute on fresh data.
+function nextWebAiId(d) {
+  const ymd = todayStr().replace(/-/g, '');
+  const re = new RegExp(`^ai-${ymd}-w(\\d+)$`);
+  let max = 0;
+  for (const i of d.actionItems) {
+    const m = re.exec(i.id);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `ai-${ymd}-w${String(max + 1).padStart(2, '0')}`;
+}
+function newRiskId(d, title) {
+  const base = 'risk-' + (title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'new');
+  let id = base;
+  for (let n = 2; d.risks.some(r => r.id === id); n++) id = `${base}-${n}`;
+  return id;
+}
+function nextStageId(d, takenIds) {
+  let max = 0;
+  for (const id of [...d.advancedPurchase.stages.map(s => s.id), ...takenIds]) {
+    const m = /^aps-(\d+)$/.exec(id ?? '');
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `aps-${max + 1}`;
+}
+
+async function saveViaMutate(btn, mutator, message, okMsg) {
+  btn.disabled = true;
+  try {
+    await remoteMutate(mutator, message);
+    closeModal();
+    render();
+    toast(okMsg, 'ok');
+  } catch (err) {
+    btn.disabled = false;
+    toast(err.message === 'no-token' ? 'Add a GitHub token in Settings first.' : err.message, 'warn');
+  }
+}
+
+// Two-step in-place delete: first click arms, second click (within 4s) confirms.
+function armDelete(btn, onConfirm) {
+  let armed = false;
+  let timer = null;
+  btn.addEventListener('click', () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = 'Really delete?';
+      btn.classList.add('armed');
+      timer = setTimeout(() => {
+        armed = false;
+        btn.textContent = 'Delete';
+        btn.classList.remove('armed');
+      }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    onConfirm(btn);
+  });
+}
+
+function memberOptionsHtml(selectedId) {
+  return state.data.groups.map(g => {
+    const opts = state.data.members
+      .filter(m => m.group === g.id)
+      .map(m => `<option value="${esc(m.id)}" ${m.id === selectedId ? 'selected' : ''}>${esc(m.name)}</option>`)
+      .join('');
+    return opts ? `<optgroup label="${esc(g.name)}">${opts}</optgroup>` : '';
+  }).join('');
+}
+
+function syncStickyHeight() {
+  const h = $('#topbar')?.offsetHeight || 120;
+  document.documentElement.style.setProperty('--sticky-h', `${h}px`);
+}
 
 /* ---------------- rendering ---------------- */
 function render() {
   sortMeetings();
   renderTopbar();
+  renderGroupNav();
   renderAvailability();
   renderAps();
   renderRisks();
   renderOpenSummary();
   renderTeam();
   renderFooter();
+}
+
+function renderGroupNav() {
+  $('#groupnav').innerHTML = state.data.groups.map(g => {
+    const members = state.data.members.filter(m => m.group === g.id);
+    if (!members.length) return '';
+    const n = members.reduce((sum, m) => sum + openItems(m.id).length, 0);
+    return `<button class="gnav-chip" data-target="group-${esc(g.id)}">${esc(g.name)}${n ? `<span class="gnav-count">${n}</span>` : ''}</button>`;
+  }).join('');
+  syncStickyHeight();
 }
 
 function renderTopbar() {
@@ -304,7 +408,10 @@ function renderRisks() {
   $('#risks-count').textContent = `${risks.length} active`;
   $('#risks-body').innerHTML = risks.map(r => `
     <li>
-      <div class="risk-title">${esc(r.title)}</div>
+      <div class="risk-row">
+        <div class="risk-title">${esc(r.title)}</div>
+        <button class="risk-edit" data-id="${esc(r.id)}" title="Edit this risk">✎</button>
+      </div>
       ${r.detail ? `<div class="risk-detail">${esc(r.detail)}</div>` : ''}
       ${r.lastUpdateNote ? `<div class="risk-note">${fmtDay(r.lastUpdate, { month: 'short', day: 'numeric' })} — ${esc(r.lastUpdateNote)}</div>` : ''}
     </li>`).join('');
@@ -331,6 +438,7 @@ function aiItemHtml(item, done) {
         ${item.detail ? `<div class="ai-detail">${esc(item.detail)}</div>` : ''}
         <div class="ai-meta">${meta}</div>
       </div>
+      ${done ? '' : `<button class="ai-edit" data-id="${esc(item.id)}" title="Edit this item">✎</button>`}
     </li>`;
 }
 
@@ -344,7 +452,8 @@ function renderTeam() {
       const absent = mtg.absent?.[m.id];
       const notes = notesFor(m.id);
       const open = openItems(m.id);
-      const done = doneItems(m.id).slice(0, 6);
+      const { fresh, folded } = splitDone(m.id);
+      const foldedShow = folded.slice(0, 6);
       let badge = '';
       if (pto) badge = `<span class="badge badge-ooo">${esc(pto.type)} · back ${fmtDay(pto.returns, { month: 'short', day: 'numeric' })}</span>`;
       else if (absent) badge = `<span class="badge badge-absent" title="${esc(absent)}">absent ${fmtDay(mtg.date, { month: 'short', day: 'numeric' })}</span>`;
@@ -357,11 +466,12 @@ function renderTeam() {
             <div class="member-meta">${esc(g.name)}${pto?.note ? ` — ${esc(pto.note)}` : ''}</div>
           </div>
           ${badge}
+          <button class="card-add" data-member="${esc(m.id)}" title="Add an action item for ${esc(m.name)}">＋</button>
         </div>
-        ${open.length ? `
+        ${(open.length || fresh.length) ? `
         <div>
           <div class="section-label"><span>Action items (${open.length})</span></div>
-          <ul class="ai-list">${open.map(i => aiItemHtml(i, false)).join('')}</ul>
+          <ul class="ai-list">${open.map(i => aiItemHtml(i, false)).join('')}${fresh.map(i => aiItemHtml(i, true)).join('')}</ul>
         </div>` : ''}
         <div>
           <div class="section-label">
@@ -373,14 +483,14 @@ function renderTeam() {
             : `<div class="notes-empty">No notes yet.</div>`}
           ${absent && notes && !notes.isLatest ? `<div class="notes-empty" style="margin-top:4px">${fmtDay(mtg.date, { month: 'short', day: 'numeric' })}: ${esc(absent)}</div>` : ''}
         </div>
-        ${done.length ? `
+        ${foldedShow.length ? `
         <details class="completed-fold">
-          <summary>Recently completed (${done.length})</summary>
-          <ul class="ai-list">${done.map(i => aiItemHtml(i, true)).join('')}</ul>
+          <summary>Recently completed (${foldedShow.length})</summary>
+          <ul class="ai-list">${foldedShow.map(i => aiItemHtml(i, true)).join('')}</ul>
         </details>` : ''}
       </div>`;
     }).join('');
-    return `<div class="group-block"><h3 class="group-title">${esc(g.name)}</h3><div class="member-grid">${cards}</div></div>`;
+    return `<div class="group-block" id="group-${esc(g.id)}"><h3 class="group-title">${esc(g.name)}</h3><div class="member-grid">${cards}</div></div>`;
   }).join('');
   $('#team').innerHTML = groups;
 }
@@ -482,6 +592,185 @@ function confirmReopenModal(item, isLocal) {
   });
 }
 
+function editActionItemModal(item) {
+  const root = openModal(`
+    <div class="modal-head"><h2>Edit action item</h2><button class="modal-close" data-close>×</button></div>
+    <p class="muted" style="margin:0;font-size:12.5px">${esc(item.id)} · raised ${fmtDay(item.created)}${item.source ? ` · ${esc(item.source)}` : ''}</p>
+    <label for="ai-text">Item</label>
+    <input id="ai-text" type="text" value="${esc(item.text)}">
+    <label for="ai-detail">Detail (optional)</label>
+    <textarea id="ai-detail" rows="3">${esc(item.detail ?? '')}</textarea>
+    <label for="ai-owner">Owner</label>
+    <select id="ai-owner">${memberOptionsHtml(item.owner)}</select>
+    <p class="error" id="ai-err" hidden>The item text can’t be empty.</p>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn btn-danger" id="ai-delete">Delete</button>
+      <span style="display:flex;gap:9px">
+        <button class="btn" data-close>Cancel</button>
+        <button class="btn btn-primary" id="ai-save">Save</button>
+      </span>
+    </div>`, true);
+  root.querySelector('#ai-save').addEventListener('click', (e) => {
+    const text = root.querySelector('#ai-text').value.trim();
+    const detail = root.querySelector('#ai-detail').value.trim();
+    const owner = root.querySelector('#ai-owner').value;
+    if (!text) { root.querySelector('#ai-err').hidden = false; return; }
+    saveViaMutate(e.currentTarget, (d) => {
+      const it = d.actionItems.find(i => i.id === item.id);
+      if (!it) throw new Error('That item no longer exists — someone may have deleted it. Refresh and retry.');
+      it.text = text;
+      if (detail) it.detail = detail; else delete it.detail;
+      it.owner = owner;
+    }, `Edit item: ${text.slice(0, 60)} (${editorName()})`, 'Item updated for the whole team.');
+  });
+  armDelete(root.querySelector('#ai-delete'), (btn) => {
+    saveViaMutate(btn, (d) => {
+      const idx = d.actionItems.findIndex(i => i.id === item.id);
+      if (idx < 0) throw new Error('That item no longer exists — refresh.');
+      d.actionItems.splice(idx, 1);
+    }, `Delete item: ${item.text.slice(0, 60)} (${editorName()})`, 'Item deleted.');
+  });
+}
+
+function addActionItemModal(ownerId) {
+  const root = openModal(`
+    <div class="modal-head"><h2>Add action item</h2><button class="modal-close" data-close>×</button></div>
+    <label for="ai-owner">Owner</label>
+    <select id="ai-owner">${memberOptionsHtml(ownerId)}</select>
+    <label for="ai-text">Item</label>
+    <input id="ai-text" type="text" placeholder="Imperative — e.g. Send the budgetary quote to Cox">
+    <label for="ai-detail">Detail (optional)</label>
+    <textarea id="ai-detail" rows="3" placeholder="Context, names, dates"></textarea>
+    <p class="hint">Saves for the whole team (commits to GitHub). Raised today; id assigned automatically.</p>
+    <p class="error" id="ai-err" hidden>The item text can’t be empty.</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="ai-save">Add item</button>
+    </div>`, true);
+  root.querySelector('#ai-save').addEventListener('click', (e) => {
+    const text = root.querySelector('#ai-text').value.trim();
+    const detail = root.querySelector('#ai-detail').value.trim();
+    const owner = root.querySelector('#ai-owner').value;
+    if (!text) { root.querySelector('#ai-err').hidden = false; return; }
+    saveViaMutate(e.currentTarget, (d) => {
+      d.actionItems.unshift({
+        id: nextWebAiId(d),
+        owner,
+        text,
+        ...(detail ? { detail } : {}),
+        created: todayStr(),
+        source: `web — ${editorName()}`,
+        status: 'open',
+        completed: null,
+      });
+    }, `Add item: ${text.slice(0, 60)} (${editorName()})`, 'Item added for the whole team.');
+  });
+}
+
+function apsEditModal() {
+  const aps = state.data.advancedPurchase;
+  const rowHtml = (s) => `
+    <div class="aps-edit-row"${s?.id ? ` data-stage-id="${esc(s.id)}"` : ''}>
+      <input type="text" class="aps-label" placeholder="Stage" value="${esc(s?.label ?? '')}">
+      <input type="text" class="aps-note" placeholder="Note (optional)" value="${esc(s?.note ?? '')}">
+      <button class="btn btn-small aps-row-del" title="Remove this stage">×</button>
+    </div>`;
+  const root = openModal(`
+    <div class="modal-head"><h2>Edit advanced purchase status</h2><button class="modal-close" data-close>×</button></div>
+    <div id="aps-rows">${aps.stages.map(rowHtml).join('')}</div>
+    <button class="btn btn-small" id="aps-add-row">＋ Add stage</button>
+    <label for="aps-footnote">Verification footnote (optional)</label>
+    <textarea id="aps-footnote" rows="2">${esc(aps.lastVerifiedNote ?? '')}</textarea>
+    <p class="hint">Saving updates it for the whole team and marks the status verified today (${esc(fmtDay(todayStr()))}).</p>
+    <p class="error" id="aps-err" hidden>Every stage needs a label — remove empty rows with × instead.</p>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="aps-save">Save</button>
+    </div>`);
+  root.querySelector('#aps-add-row').addEventListener('click', () => {
+    root.querySelector('#aps-rows').insertAdjacentHTML('beforeend', rowHtml(null));
+  });
+  root.querySelector('#aps-rows').addEventListener('click', (e) => {
+    const del = e.target.closest('.aps-row-del');
+    if (del) del.closest('.aps-edit-row').remove();
+  });
+  root.querySelector('#aps-save').addEventListener('click', (e) => {
+    const rows = [...root.querySelectorAll('.aps-edit-row')].map(r => ({
+      id: r.dataset.stageId || null,
+      label: r.querySelector('.aps-label').value.trim(),
+      note: r.querySelector('.aps-note').value.trim(),
+    }));
+    if (rows.some(r => !r.label)) { root.querySelector('#aps-err').hidden = false; return; }
+    const note = root.querySelector('#aps-footnote').value.trim();
+    saveViaMutate(e.currentTarget, (d) => {
+      const taken = rows.map(r => r.id).filter(Boolean);
+      d.advancedPurchase.stages = rows.map(r => {
+        const id = r.id ?? nextStageId(d, taken);
+        if (!r.id) taken.push(id);
+        return { id, label: r.label, ...(r.note ? { note: r.note } : {}) };
+      });
+      d.advancedPurchase.lastVerified = todayStr();
+      if (note) d.advancedPurchase.lastVerifiedNote = note; else delete d.advancedPurchase.lastVerifiedNote;
+    }, `Edit advanced purchase status (${editorName()})`, 'Advanced purchase status updated.');
+  });
+}
+
+function riskModal(risk) {
+  const isEdit = !!risk;
+  const root = openModal(`
+    <div class="modal-head"><h2>${isEdit ? 'Edit risk' : 'Add risk'}</h2><button class="modal-close" data-close>×</button></div>
+    <label for="risk-title">Title</label>
+    <input id="risk-title" type="text" value="${esc(risk?.title ?? '')}" placeholder="Short risk name">
+    <label for="risk-detail">Detail (optional)</label>
+    <textarea id="risk-detail" rows="3">${esc(risk?.detail ?? '')}</textarea>
+    <label for="risk-note">Latest update note (optional)</label>
+    <input id="risk-note" type="text" value="${esc(risk?.lastUpdateNote ?? '')}" placeholder="e.g. Order shipped; monitoring">
+    <p class="hint">Saving stamps this risk as updated today (${esc(fmtDay(todayStr()))}).</p>
+    <p class="error" id="risk-err" hidden>The title can’t be empty.</p>
+    <div class="modal-actions"${isEdit ? ' style="justify-content:space-between"' : ''}>
+      ${isEdit ? '<button class="btn btn-danger" id="risk-delete">Delete</button><span style="display:flex;gap:9px">' : ''}
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="risk-save">${isEdit ? 'Save' : 'Add risk'}</button>
+      ${isEdit ? '</span>' : ''}
+    </div>`, true);
+  root.querySelector('#risk-save').addEventListener('click', (e) => {
+    const title = root.querySelector('#risk-title').value.trim();
+    const detail = root.querySelector('#risk-detail').value.trim();
+    const note = root.querySelector('#risk-note').value.trim();
+    if (!title) { root.querySelector('#risk-err').hidden = false; return; }
+    if (isEdit) {
+      saveViaMutate(e.currentTarget, (d) => {
+        const r = d.risks.find(x => x.id === risk.id) ?? d.risks.find(x => x.title === risk.title);
+        if (!r) throw new Error('That risk no longer exists — someone may have removed it. Refresh.');
+        r.title = title;
+        if (detail) r.detail = detail; else delete r.detail;
+        if (note) r.lastUpdateNote = note; else delete r.lastUpdateNote;
+        r.lastUpdate = todayStr();
+      }, `Edit risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk updated for the whole team.');
+    } else {
+      saveViaMutate(e.currentTarget, (d) => {
+        d.risks.push({
+          id: newRiskId(d, title),
+          title,
+          ...(detail ? { detail } : {}),
+          lastUpdate: todayStr(),
+          ...(note ? { lastUpdateNote: note } : {}),
+        });
+      }, `Add risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk added for the whole team.');
+    }
+  });
+  if (isEdit) {
+    armDelete(root.querySelector('#risk-delete'), (btn) => {
+      saveViaMutate(btn, (d) => {
+        let idx = d.risks.findIndex(x => x.id === risk.id);
+        if (idx < 0) idx = d.risks.findIndex(x => x.title === risk.title);
+        if (idx < 0) throw new Error('That risk no longer exists — refresh.');
+        d.risks.splice(idx, 1);
+      }, `Delete risk: ${risk.title.slice(0, 60)} (${editorName()})`, 'Risk removed.');
+    });
+  }
+}
+
 function historyModal() {
   const meetings = state.data.meetings;
   const html = `
@@ -513,7 +802,7 @@ function settingsModal() {
     <div class="modal-head"><h2>Settings</h2><button class="modal-close" data-close>×</button></div>
     <label for="set-name">Your name (shown on items you complete)</label>
     <input id="set-name" type="text" value="${esc(name)}" placeholder="e.g. Tyler">
-    <label for="set-pat">GitHub token (enables one-click complete for the whole team)</label>
+    <label for="set-pat">GitHub token (enables editing and one-click complete for the whole team)</label>
     <input id="set-pat" type="password" value="${esc(pat)}" placeholder="github_pat_… or ghp_…" autocomplete="off">
     <p class="hint">Fine-grained personal access token for <b>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</b> with <b>Contents: Read and write</b> — nothing else. Create at GitHub → Settings → Developer settings → Fine-grained tokens. Stored only in this browser.</p>
     <div class="modal-actions" style="justify-content:flex-start;margin-top:10px">
@@ -521,7 +810,7 @@ function settingsModal() {
       <span id="set-test-result" class="hint"></span>
     </div>
     <div class="settings-info">
-      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing an item with a token commits the change immediately (visible to everyone). Without a token, completions stay on this device and get folded in at the next transcript update. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
+      <b>How saving works.</b> The tracker is a single encrypted file in GitHub. Completing, editing, or adding anything with a token commits the change immediately (visible to everyone). Without a token, completions stay on this device and get folded in at the next transcript update — editing needs the token. Verbally closing an item on the stand-up also works — it's picked up from the transcript.
     </div>
     <div class="modal-actions">
       <button class="btn" id="set-lock">Lock tracker on this device</button>
@@ -659,16 +948,43 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btn-settings').addEventListener('click', settingsModal);
   $('#btn-theme').addEventListener('click', cycleTheme);
 
-  // Delegated complete / reopen clicks
+  // Delegated clicks in the team grid: complete/reopen, edit, add
   $('#team').addEventListener('click', (e) => {
-    const btn = e.target.closest('.ai-check');
-    if (!btn) return;
-    const id = btn.dataset.id;
-    const item = state.data.actionItems.find(i => i.id === id);
-    if (!item) return;
-    if (btn.dataset.action === 'complete') confirmCompleteModal(item);
-    else confirmReopenModal(item, !!localDone()[id]);
+    const chk = e.target.closest('.ai-check');
+    if (chk) {
+      const item = state.data.actionItems.find(i => i.id === chk.dataset.id);
+      if (!item) return;
+      if (chk.dataset.action === 'complete') confirmCompleteModal(item);
+      else confirmReopenModal(item, !!localDone()[item.id]);
+      return;
+    }
+    const edit = e.target.closest('.ai-edit');
+    if (edit) {
+      const item = state.data.actionItems.find(i => i.id === edit.dataset.id);
+      if (item && requirePat()) editActionItemModal(item);
+      return;
+    }
+    const add = e.target.closest('.card-add');
+    if (add && requirePat()) addActionItemModal(add.dataset.member);
   });
+
+  // Risk + advanced purchase editing
+  $('#risks-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('.risk-edit');
+    if (!btn) return;
+    const risk = state.data.risks.find(r => r.id === btn.dataset.id);
+    if (risk && requirePat()) riskModal(risk);
+  });
+  $('#btn-aps-edit').addEventListener('click', () => { if (requirePat()) apsEditModal(); });
+  $('#btn-risk-add').addEventListener('click', () => { if (requirePat()) riskModal(null); });
+
+  // Team jump navigation
+  $('#groupnav').addEventListener('click', (e) => {
+    const chip = e.target.closest('.gnav-chip');
+    if (!chip) return;
+    document.getElementById(chip.dataset.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  window.addEventListener('resize', syncStickyHeight);
 
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const port = Number(process.argv[2]) || 8420;
+const port = Number(process.argv[2]) || Number(process.env.PORT) || 8420;
 const types = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
