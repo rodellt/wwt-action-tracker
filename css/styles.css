@@ -202,7 +202,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px clamp(14px, 3vw, 28px) 6
 .aps-stage:first-child { border-top: none; }
 .aps-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-top: 7px; }
 .aps-label { font-weight: 620; font-size: 14px; }
-.aps-note { font-size: 13px; color: var(--text-2); margin-top: 1px; }
+.aps-note { font-size: 13px; color: var(--text-2); margin-top: 1px; white-space: pre-line; }
 .aps-footnote { margin-top: 10px; font-size: 12.5px; color: var(--text-3); border-top: 1px dashed var(--border); padding-top: 9px; }
 
 /* Risks */
@@ -210,7 +210,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px clamp(14px, 3vw, 28px) 6
 .risk-list li { padding: 8px 0; border-top: 1px solid var(--border); }
 .risk-list li:first-child { border-top: none; }
 .risk-title { font-weight: 620; font-size: 14px; }
-.risk-detail { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.risk-detail { font-size: 13px; color: var(--text-2); margin-top: 2px; white-space: pre-line; }
 .risk-note { font-size: 12px; color: var(--text-3); margin-top: 3px; }
 
 /* Availability strip */
@@ -312,7 +312,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px clamp(14px, 3vw, 28px) 6
 .ai-text .ai-title { font-weight: 570; display: flex; align-items: baseline; gap: 5px; }
 .ai-title-text { flex: 1; min-width: 0; }
 .ai-tag { flex: none; font-size: 11px; color: var(--text-3); white-space: nowrap; font-weight: 550; }
-.ai-detail { color: var(--text-2); font-size: 12.5px; margin-top: 3px; display: flex; flex-direction: column; gap: 3px; }
+.ai-detail { color: var(--text-2); font-size: 12.5px; margin-top: 3px; display: flex; flex-direction: column; gap: 3px; white-space: pre-line; }
 .ai-meta { color: var(--text-3); font-size: 11.5px; display: flex; gap: 8px; flex-wrap: wrap; }
 .ai-meta .local-flag { color: var(--warn); font-weight: 650; }
 .age-hot { color: var(--warn); font-weight: 650; }
@@ -364,7 +364,7 @@ details.completed-fold .ai-list { margin-top: 8px; }
   background: var(--panel-2); color: var(--text); font-size: 14px;
 }
 .modal .hint { font-size: 12px; color: var(--text-3); margin-top: 5px; line-height: 1.45; }
-.modal textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+.modal textarea { resize: none; overflow: hidden; min-height: 38px; font-family: inherit; line-height: 1.45; }
 .modal-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
 .btn-danger { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .btn-danger.armed { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -487,11 +487,11 @@ body.presenting { overflow: hidden; }
 .p-stage:first-child { border-top: none; }
 .p-stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-top: 11px; flex: none; }
 .p-stage-label { font-size: 22px; font-weight: 650; }
-.p-stage-note { font-size: 15.5px; color: var(--text-2); margin-top: 3px; max-width: 860px; }
+.p-stage-note { font-size: 15.5px; color: var(--text-2); margin-top: 3px; max-width: 860px; white-space: pre-line; }
 .p-risk { padding: 15px 0; border-top: 1px solid var(--border); }
 .p-risk:first-child { border-top: none; }
 .p-risk-title { font-size: 21px; font-weight: 650; }
-.p-risk-detail { font-size: 15.5px; color: var(--text-2); margin-top: 4px; max-width: 900px; }
+.p-risk-detail { font-size: 15.5px; color: var(--text-2); margin-top: 4px; max-width: 900px; white-space: pre-line; }
 .p-risk-note { font-size: 13.5px; color: var(--text-3); margin-top: 4px; }
 .present-foot {
   flex: none;

@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -566,6 +566,28 @@ function renderFooter() {
 }
 
 /* ---------------- modals ---------------- */
+// Make every textarea in `scope` grow with its content. Fields marked
+// data-single keep single-line semantics (Enter is ignored; normalized on save).
+function enableAutoGrow(scope) {
+  const MAX = 380; // beyond this, scroll inside instead of growing the modal off-screen
+  scope.querySelectorAll('textarea:not([data-grow])').forEach(t => {
+    t.dataset.grow = '1';
+    const grow = () => {
+      t.style.height = 'auto';
+      const want = t.scrollHeight + 2;
+      t.style.height = `${Math.min(want, MAX)}px`;
+      t.style.overflowY = want > MAX ? 'auto' : 'hidden';
+    };
+    t.addEventListener('input', grow);
+    if (t.dataset.single !== undefined) {
+      t.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+    }
+    grow();                      // size to content immediately
+    requestAnimationFrame(grow); // and again after first paint (fonts/layout settle)
+  });
+}
+const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+
 function openModal(html, narrow = false) {
   const root = $('#modal-root');
   root.innerHTML = `<div class="modal-backdrop"><div class="modal ${narrow ? 'narrow' : ''}">${html}</div></div>`;
@@ -573,6 +595,7 @@ function openModal(html, narrow = false) {
     if (e.target === e.currentTarget) closeModal();
   });
   root.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeModal));
+  enableAutoGrow(root);
   return root;
 }
 function closeModal() { $('#modal-root').innerHTML = ''; }
@@ -584,7 +607,7 @@ function confirmCompleteModal(item) {
     <p style="margin:0 0 4px"><b>${esc(item.text)}</b></p>
     <p class="muted" style="margin:0;font-size:13px">${esc(memberById(item.owner)?.name ?? item.owner)} · raised ${fmtDay(item.created)}</p>
     <label for="complete-note">Note (optional)</label>
-    <input id="complete-note" type="text" placeholder="e.g. shipped this morning">
+    <textarea id="complete-note" rows="1" data-single placeholder="e.g. shipped this morning"></textarea>
     <p class="hint">${canWrite
       ? 'Saves for the whole team — this commits the update to GitHub.'
       : '⚠ Shared editing isn’t enabled on this page, so this is saved <b>on this device only</b>. It will still count as done here, and it gets baked in for everyone with the next transcript update.'}</p>
@@ -595,7 +618,7 @@ function confirmCompleteModal(item) {
   root.querySelector('#complete-go').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    const note = root.querySelector('#complete-note').value.trim();
+    const note = oneLine(root.querySelector('#complete-note').value);
     const by = getLS(LS.name) || 'web';
     if (canWrite) {
       try {
@@ -663,7 +686,7 @@ function editActionItemModal(item) {
     <div class="modal-head"><h2>Edit action item</h2><button class="modal-close" data-close>×</button></div>
     <p class="muted" style="margin:0;font-size:12.5px">${esc(item.id)} · raised ${fmtDay(item.created)}${item.source ? ` · ${esc(item.source)}` : ''}</p>
     <label for="ai-text">Item</label>
-    <input id="ai-text" type="text" value="${esc(item.text)}">
+    <textarea id="ai-text" rows="1" data-single>${esc(item.text)}</textarea>
     <label for="ai-detail">Detail (optional)</label>
     <textarea id="ai-detail" rows="3">${esc(item.detail ?? '')}</textarea>
     <label for="ai-owner">Owner</label>
@@ -677,7 +700,7 @@ function editActionItemModal(item) {
       </span>
     </div>`, true);
   root.querySelector('#ai-save').addEventListener('click', (e) => {
-    const text = root.querySelector('#ai-text').value.trim();
+    const text = oneLine(root.querySelector('#ai-text').value);
     const detail = root.querySelector('#ai-detail').value.trim();
     const owner = root.querySelector('#ai-owner').value;
     if (!text) { root.querySelector('#ai-err').hidden = false; return; }
@@ -704,7 +727,7 @@ function addActionItemModal(ownerId) {
     <label for="ai-owner">Owner</label>
     <select id="ai-owner">${memberOptionsHtml(ownerId)}</select>
     <label for="ai-text">Item</label>
-    <input id="ai-text" type="text" placeholder="Imperative — e.g. Send the budgetary quote to Cox">
+    <textarea id="ai-text" rows="1" data-single placeholder="Imperative — e.g. Send the budgetary quote to Cox"></textarea>
     <label for="ai-detail">Detail (optional)</label>
     <textarea id="ai-detail" rows="3" placeholder="Context, names, dates"></textarea>
     <p class="hint">Saves for the whole team (commits to GitHub). Raised today; id assigned automatically.</p>
@@ -714,7 +737,7 @@ function addActionItemModal(ownerId) {
       <button class="btn btn-primary" id="ai-save">Add item</button>
     </div>`, true);
   root.querySelector('#ai-save').addEventListener('click', (e) => {
-    const text = root.querySelector('#ai-text').value.trim();
+    const text = oneLine(root.querySelector('#ai-text').value);
     const detail = root.querySelector('#ai-detail').value.trim();
     const owner = root.querySelector('#ai-owner').value;
     if (!text) { root.querySelector('#ai-err').hidden = false; return; }
@@ -737,8 +760,8 @@ function apsEditModal() {
   const aps = state.data.advancedPurchase;
   const rowHtml = (s) => `
     <div class="aps-edit-row"${s?.id ? ` data-stage-id="${esc(s.id)}"` : ''}>
-      <input type="text" class="aps-label" placeholder="Stage" value="${esc(s?.label ?? '')}">
-      <input type="text" class="aps-note" placeholder="Note (optional)" value="${esc(s?.note ?? '')}">
+      <textarea class="aps-label" rows="1" data-single placeholder="Stage">${esc(s?.label ?? '')}</textarea>
+      <textarea class="aps-note" rows="1" placeholder="Note (optional)">${esc(s?.note ?? '')}</textarea>
       <button class="btn btn-small aps-row-del" title="Remove this stage">×</button>
     </div>`;
   const root = openModal(`
@@ -755,6 +778,7 @@ function apsEditModal() {
     </div>`);
   root.querySelector('#aps-add-row').addEventListener('click', () => {
     root.querySelector('#aps-rows').insertAdjacentHTML('beforeend', rowHtml(null));
+    enableAutoGrow(root.querySelector('#aps-rows'));
   });
   root.querySelector('#aps-rows').addEventListener('click', (e) => {
     const del = e.target.closest('.aps-row-del');
@@ -763,7 +787,7 @@ function apsEditModal() {
   root.querySelector('#aps-save').addEventListener('click', (e) => {
     const rows = [...root.querySelectorAll('.aps-edit-row')].map(r => ({
       id: r.dataset.stageId || null,
-      label: r.querySelector('.aps-label').value.trim(),
+      label: oneLine(r.querySelector('.aps-label').value),
       note: r.querySelector('.aps-note').value.trim(),
     }));
     if (rows.some(r => !r.label)) { root.querySelector('#aps-err').hidden = false; return; }
@@ -786,11 +810,11 @@ function riskModal(risk) {
   const root = openModal(`
     <div class="modal-head"><h2>${isEdit ? 'Edit risk' : 'Add risk'}</h2><button class="modal-close" data-close>×</button></div>
     <label for="risk-title">Title</label>
-    <input id="risk-title" type="text" value="${esc(risk?.title ?? '')}" placeholder="Short risk name">
+    <textarea id="risk-title" rows="1" data-single placeholder="Short risk name">${esc(risk?.title ?? '')}</textarea>
     <label for="risk-detail">Detail (optional)</label>
     <textarea id="risk-detail" rows="3">${esc(risk?.detail ?? '')}</textarea>
     <label for="risk-note">Latest update note (optional)</label>
-    <input id="risk-note" type="text" value="${esc(risk?.lastUpdateNote ?? '')}" placeholder="e.g. Order shipped; monitoring">
+    <textarea id="risk-note" rows="1" data-single placeholder="e.g. Order shipped; monitoring">${esc(risk?.lastUpdateNote ?? '')}</textarea>
     <p class="hint">Saving stamps this risk as updated today (${esc(fmtDay(todayStr()))}).</p>
     <p class="error" id="risk-err" hidden>The title can’t be empty.</p>
     <div class="modal-actions"${isEdit ? ' style="justify-content:space-between"' : ''}>
@@ -800,9 +824,9 @@ function riskModal(risk) {
       ${isEdit ? '</span>' : ''}
     </div>`, true);
   root.querySelector('#risk-save').addEventListener('click', (e) => {
-    const title = root.querySelector('#risk-title').value.trim();
+    const title = oneLine(root.querySelector('#risk-title').value);
     const detail = root.querySelector('#risk-detail').value.trim();
-    const note = root.querySelector('#risk-note').value.trim();
+    const note = oneLine(root.querySelector('#risk-note').value);
     if (!title) { root.querySelector('#risk-err').hidden = false; return; }
     if (isEdit) {
       saveViaMutate(e.currentTarget, (d) => {
