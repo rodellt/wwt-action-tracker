@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -171,7 +171,9 @@ async function fetchViaRaw(path = CONFIG.dataPath) {
  * who can unlock the page transparently gets edit access — no per-user token.
  * A personal token in Settings still takes precedence when present. */
 function effectiveToken() {
-  return getLS(LS.pat) || state.teamToken;
+  // Shared team key first — a stale personal token left over from the old
+  // per-user setup must never shadow a healthy published key.
+  return state.teamToken || getLS(LS.pat);
 }
 async function loadTeamKey() {
   const sources = [
@@ -209,10 +211,15 @@ async function fetchEnvelope() {
 
 /* ---------------- remote mutation (complete / reopen) ---------------- */
 async function remoteMutate(mutator, message) {
-  const pat = effectiveToken();
+  let pat = effectiveToken();
+  if (!pat) {
+    // The shared key loads asynchronously after unlock — if a save races it, try once more.
+    await loadTeamKey();
+    pat = effectiveToken();
+  }
   if (!pat) throw new Error('no-token');
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const res = await fetch(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(pat) });
+    const res = await fetchWithTimeout(`${contentsUrl()}?ref=${CONFIG.branch}&_=${Date.now()}`, { headers: ghHeaders(pat) }, 20000);
     if (res.status === 401 || res.status === 403) throw new Error('The tracker’s edit key was rejected — it may have expired. Tell Tyler.');
     if (!res.ok) throw new Error(`GitHub read failed (${res.status})`);
     const info = await res.json();
@@ -221,7 +228,7 @@ async function remoteMutate(mutator, message) {
     mutator(data);
     data.lastUpdated = new Date().toISOString();
     const newEnv = await encryptEnvelope(data, state.passphrase);
-    const put = await fetch(contentsUrl(), {
+    const put = await fetchWithTimeout(contentsUrl(), {
       method: 'PUT',
       headers: ghHeaders(pat),
       body: JSON.stringify({
@@ -230,7 +237,7 @@ async function remoteMutate(mutator, message) {
         sha: info.sha,
         branch: CONFIG.branch,
       }),
-    });
+    }, 20000);
     if (put.ok) { state.data = data; return; }
     if (put.status !== 409 && put.status !== 422) throw new Error(`GitHub write failed (${put.status})`);
     // sha conflict — someone else wrote in between; retry with fresh copy
@@ -596,7 +603,9 @@ function confirmReopenModal(item, isLocal) {
       <button class="btn btn-primary" id="reopen-go">Reopen</button>
     </div>`, true);
   root.querySelector('#reopen-go').addEventListener('click', async (e) => {
-    e.currentTarget.disabled = true;
+    // Capture the button now — e.currentTarget is null after the first await.
+    const btn = e.currentTarget;
+    btn.disabled = true;
     if (isLocal) {
       const ld = localDone();
       delete ld[item.id];
@@ -615,7 +624,7 @@ function confirmReopenModal(item, isLocal) {
       closeModal(); render();
       toast('Reopened for the whole team.', 'ok');
     } catch (err) {
-      e.currentTarget.disabled = false;
+      btn.disabled = false;
       toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
     }
   });
