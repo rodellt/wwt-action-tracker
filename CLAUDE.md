@@ -52,10 +52,20 @@ it in the browser with the team passphrase.
 7. Report to the user: new/completed action items, APO + risk changes, PTO changes,
    and anything ambiguous that needs their judgment.
 
-## SCHEDULED DAILY RUN (weekdays 9:00 AM Central)
+## SCHEDULED DAILY RUN
 
-A local scheduled task ("hpt-daily-update") runs Claude Code every weekday at
-9:00 AM Central (the stand-up runs 8:00–8:30). Transcript sources, in order:
+Two layers, same workflow (see also ONBOARDING.md for the handoff view):
+
+1. **Cloud routine (primary):** "HPT daily stand-up update"
+   (claude.ai/code/routines, id trig_01Q51z47mWpFnjRSpNVnytzV) runs weekdays at
+   14:00 UTC (~9 AM Central in summer) on Anthropic's servers — laptop-independent.
+   It checks out this repo, gets the passphrase from its own instructions, pulls
+   the transcript via Tyler's Microsoft 365 connector, follows THE DAILY WORKFLOW,
+   and pushes using the decrypted shared edit key. Note: fixed UTC cron means it
+   fires an hour earlier relative to Central in winter — its retry loop absorbs that.
+2. **Local fallback:** the desktop scheduled task ("hpt-daily-update") fires
+   weekdays ~9:45 AM Central, exits silently if the day is already in meetings[],
+   and otherwise runs the same workflow with these transcript sources, in order:
 
 1. **Microsoft 365 connector (primary, zero-click).** `outlook_calendar_search`
    for today's "Cox HPT" event (organizer Katelyn.Mentzer@wwt.com) →
