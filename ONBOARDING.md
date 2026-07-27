@@ -1,83 +1,171 @@
-# Taking over the Cox HPT Stand-Up Tracker
+# Cox HPT Stand-Up Tracker — Handoff Guide
 
-This is the handoff runbook. If you're reading this because you're inheriting the
-tracker from its previous owner, the whole takeover is about 30 minutes.
+This is the complete handoff package: what the system is, every component and the
+account it's tied to, how it runs day to day, and a phased plan for transferring
+ownership without the team noticing a bump. The takeover itself is ~30 minutes of
+work plus a couple of days of watching it run.
 
 **Live page:** https://rodellt.github.io/wwt-action-tracker/
-**How it works in one paragraph:** the page is static (GitHub Pages). All meeting
-content lives in one AES-256-encrypted file, `data/data.enc.json`; the page asks
-viewers for the team passphrase once and decrypts in the browser. Edits made on the
-page commit straight back to this repo using a shared "edit key"
+**Repo:** https://github.com/rodellt/wwt-action-tracker
+
+## 1. What this is
+
+The team's daily stand-up tracker — it replaced the screen-shared Excel "Action
+Tracker." A static webpage (GitHub Pages) shows per-person action items and notes,
+advanced purchase status, current risks, and PTO. Every weekday after the 8:00 AM
+Central call, a Claude cloud routine pulls the Teams transcript, extracts
+notes/action items/completions/risks/PTO, and commits the update; the page reflects
+it a minute later. The team can also complete/edit/add anything directly on the
+page (including in presentation mode, which the facilitator screen-shares during
+the call).
+
+Security model: the repo and page are public, but all meeting content lives in ONE
+AES-256-encrypted file (`data/data.enc.json`). Viewers type the team passphrase
+once per device. Page edits commit via a shared "edit key"
 (`data/edit-key.enc.json` — a GitHub token, itself encrypted with the same
-passphrase). Every weekday a Claude routine pulls the meeting transcript from Teams
-via a Microsoft 365 connector, extracts notes / action items / risks / PTO, and
-commits the updated encrypted file. Nothing sensitive is ever committed in
-plaintext: no transcripts, no passphrase, no tokens.
+passphrase). Nothing sensitive is ever committed in plaintext: no transcripts, no
+passphrase, no tokens, no plaintext data.
 
-## What you need from the previous owner (or an admin)
+## 2. Component inventory — and what each is anchored to
 
-1. **The team passphrase** — the same one the team types into the page. Get it
-   directly (chat/call); it is intentionally written down nowhere in this repo.
-2. **Repo access** — either transfer this repository to your GitHub account /
-   a team org (Settings → General → Transfer ownership; GitHub Pages re-enables
-   under Settings → Pages, branch `main`, root), or be added as an admin
-   collaborator.
-3. **A seat on the daily meeting** — the routine reads the "Cox HPT" event from
-   YOUR calendar, so you must be an invitee.
+| Component | Where it lives | Anchored to | Fails when |
+|---|---|---|---|
+| Live page (GitHub Pages) | rodellt.github.io/wwt-action-tracker | Repo location | Repo moves (URL changes — see §4 Phase 1) |
+| Repo + git history | github.com/rodellt/wwt-action-tracker | Tyler's personal GitHub | Only if that account is deleted |
+| Encrypted data + edit key | `data/*.enc.json` in the repo | The team passphrase | Passphrase lost (unrecoverable — see §5) |
+| Team passphrase | People's heads + each owner's local `.secrets/passphrase.txt` | — | Must be handed over person-to-person; it is written nowhere in the repo |
+| Shared edit key (page editing) | `data/edit-key.enc.json` | Tyler's GitHub fine-grained PAT (created Jul 2026, ~1yr expiry) | PAT expires/revoked → page edits fail ("edit key was rejected") |
+| Cloud routine "HPT daily stand-up update" | claude.ai/code/routines (id `trig_01Q51z47mWpFnjRSpNVnytzV`), weekdays 14:00 UTC | Tyler's Claude account + the passphrase in its instructions | His seat is deactivated → daily updates stop |
+| Microsoft 365 connector (transcript access) | claude.ai/customize/connectors | Tyler's WWT Microsoft identity | His account closes, or token needs re-auth (happens every few days/weeks — see §5) |
+| Local fallback task "hpt-daily-update" | Claude desktop app on Tyler's laptop, weekdays ~9:45 CT | Tyler's laptop + local clone + `.secrets` | Laptop off (it's only a backstop) |
+| The meeting + transcription | Teams, organized by Katelyn.Mentzer@wwt.com, 8:00–8:30 CT | Kate | Kate must keep transcription on; successor must be an invitee |
+| Docs & workflow brain | `CLAUDE.md` (pipeline), `ONBOARDING.md` (this), `README.md` | The repo | Travels with it — nothing to transfer |
 
-## Setup on your machine
+Everything in the "anchored to Tyler" rows must be re-anchored during handoff.
+Everything else transfers automatically with the repo.
 
-1. Install the Claude desktop app / Claude Code, and Node 18+, git, and the
-   GitHub CLI (`gh auth login`).
-2. Clone the repo and create the local secrets file:
-   ```
-   git clone https://github.com/<owner>/wwt-action-tracker
-   cd wwt-action-tracker
-   mkdir .secrets
-   # put the passphrase (one line) into .secrets/passphrase.txt
-   node scripts/sync.mjs   # should print "Decrypted data/data.enc.json ..." — proves the passphrase works
-   ```
-3. **Connect your Microsoft 365 connector** in the Claude app (Settings →
-   Connectors) AND at https://claude.ai/customize/connectors (that one is used by
-   the cloud routine). It authenticates as you, read-only usage.
-4. **Publish YOUR edit key** so the previous owner's token can be revoked:
-   create a fine-grained GitHub PAT (this repo only, permission
-   "Contents: Read and write", ~1 year expiry), then run
-   `node scripts/publish-edit-key.mjs` and paste it at the prompt.
-   The previous owner (or an admin) should then revoke the old token on GitHub.
-5. **Recreate the automation:**
-   - Cloud routine (primary): at https://claude.ai/code/routines create a weekday
-     routine mirroring the "SCHEDULED DAILY RUN" section of CLAUDE.md — repo
-     checkout of this repo, Microsoft 365 connector attached, and the passphrase
-     provided in the routine's instructions so it can run `scripts/sync.mjs` /
-     `scripts/publish.mjs` and push with the decrypted edit key. (Ask Claude Code
-     to set this up for you — point it at CLAUDE.md.)
-   - Local fallback (optional but recommended): a scheduled task in the Claude
-     desktop app at ~9:45 AM Central that runs the same workflow only when the
-     cloud routine hasn't already processed the day.
-6. Do a dry run: tell Claude Code "process today's transcript" after a stand-up
-   and check the live page updates.
+## 3. How it runs day to day (what the new owner actually does: usually nothing)
 
-## Routine care and feeding
+- **8:00–8:30 AM CT** — the stand-up. Facilitator opens the live page → ▶ Present
+  → screen-shares; items get completed/edited live as people report.
+- **9:08 AM CT** (14:00 UTC — an hour earlier relative to Central in winter) — the
+  cloud routine runs: syncs, pulls that day's transcript via the M365 connector
+  (retries while the transcript finishes processing), updates data, pushes. Its
+  report appears on the routines page. If days were missed, it catches up oldest
+  → newest automatically; no calendar event = holiday = skipped.
+- **~9:45 AM CT** — the local fallback task checks whether the day is processed
+  and exits silently if so; it only acts (and notifies) if the cloud run failed
+  and the laptop is on.
+- **Anytime** — team members with the passphrase view/edit from any network, no
+  VPN, no accounts.
+- The owner's only recurring duties: reconnect the M365 connector when a run
+  reports it's disconnected, refresh the edit key when it nears expiry, and hand
+  ambiguities flagged in the daily report to the right person on the call.
 
-- **Connector re-auth:** the Microsoft 365 connector occasionally needs
-  reconnecting (corporate token expiry). Symptom: the daily run reports it can't
-  reach transcripts. Fix: reconnect at claude.ai/customize/connectors.
-- **Edit key expiry:** fine-grained PATs expire (max ~1 year). Symptom: page edits
-  fail with "edit key was rejected". Fix: new PAT → `node scripts/publish-edit-key.mjs`.
-- **Rotating the passphrase:** re-encrypt with a new one (`node scripts/publish.mjs`
-  after updating .secrets/passphrase.txt), re-publish the edit key, and give the
-  team the new passphrase. Old links keep working; old passphrase stops.
-- **Missed days:** the daily run catches up automatically (it processes every
-  weekday since the last recorded meeting; holidays are skipped).
-- **Page says an old version in the footer:** hard refresh (Ctrl+F5).
+## 4. The handoff plan (phased — nothing gets torn down until the new setup is proven)
 
-## Departing-owner checklist
+### Phase 0 — Prep (before transfer day)
+- Successor needs: a Claude seat with Claude Code (with cloud routines and the
+  Microsoft 365 connector available), a GitHub account, Node 18+ and git locally,
+  and an invite on the daily "Cox HPT" meeting.
+- Decide the repo's destination. Two options:
+  - **Transfer to the successor / a team GitHub org (recommended)** — clean break.
+    ⚠ The Pages URL changes with the owner (e.g. `neworg.github.io/wwt-action-tracker/`),
+    so this requires the three-step follow-up in Phase 1 and a new link for the team.
+  - **Add successor as admin collaborator, keep repo where it is** — zero URL
+    disruption, but the project stays parked on the old owner's personal account.
+    Acceptable short-term; plan the move eventually.
 
-- [ ] Hand over the passphrase.
-- [ ] Transfer the repo (or confirm the successor has admin) — remember GitHub
-      Pages must be re-enabled after a transfer.
-- [ ] Successor publishes their edit key; revoke the old PAT on GitHub.
-- [ ] Delete/disable your routines (claude.ai/code/routines) and local scheduled
-      task once the successor's are running.
-- [ ] Disconnect your Microsoft 365 connector if the account is going away.
+### Phase 1 — Transfer day (~30 minutes, do it together)
+1. **Passphrase**: hand it over directly (call/chat — never commit it, never put
+   it in a ticket). Successor creates `.secrets/passphrase.txt` in their clone and
+   proves it with `node scripts/sync.mjs`.
+2. **Repo**: transfer (GitHub → Settings → General → Transfer ownership) or add
+   admin. If transferred: re-enable Pages (Settings → Pages → branch `main`,
+   root), update `CONFIG.owner` at the top of `js/app.js` (and bump the two
+   `?v=` cache-busters in `index.html`), commit, push, and send the team the new
+   URL. Git remotes and API calls to the old name auto-redirect for a while; the
+   old `*.github.io` URL does not — update bookmarks.
+3. **Edit key**: successor creates their own fine-grained PAT (this repo only,
+   Contents: Read & write, ~1 yr) and runs `node scripts/publish-edit-key.mjs`.
+   Page editing now runs on their token.
+4. **Connector**: successor connects Microsoft 365 at claude.ai/customize/connectors
+   (and in the desktop app) under THEIR account.
+5. **Automation**: successor opens Claude Code in their clone and says:
+   *"Recreate the daily cloud routine and local fallback task for this tracker per
+   CLAUDE.md's SCHEDULED DAILY RUN section."* Claude rebuilds both under their
+   accounts (the routine needs the passphrase in its instructions — that's
+   expected and consented; it's how the cloud run decrypts/re-encrypts).
+
+### Phase 2 — Verification (run in parallel 1–2 days)
+- Old routine stays enabled as backup; the duplicate-day guard ("already
+  processed — nothing to do") makes double-running harmless.
+- Confirm: successor's routine posts a green run report; the live page updates by
+  ~9:15 CT; a page edit commits under the new key; presentation mode works on
+  their machine.
+
+### Phase 3 — Decommission (old owner, after verification)
+- [ ] Revoke the old fine-grained PAT on GitHub (page edits should still work —
+      they're on the successor's key now; if they break, re-run step 3).
+- [ ] Delete the old cloud routine (claude.ai/code/routines) and the local
+      scheduled task; uninstall/sign out as needed.
+- [ ] Disconnect the old Microsoft 365 connector.
+- [ ] Delete the local clone including `.secrets/` (or at least `.secrets/`).
+- [ ] Optional but wise if the passphrase was ever shared beyond the team: rotate
+      it (§5) so departed-owner knowledge ages out.
+
+## 5. Things the new owner must know (learned the hard way)
+
+- **The passphrase is the crown jewel.** It grants read AND edit (via the edit
+  key). It's in no file that's committed. If it must rotate: update
+  `.secrets/passphrase.txt`, run `node scripts/publish.mjs`, re-run
+  `node scripts/publish-edit-key.mjs`, tell the team. If it's ever *lost* and no
+  machine still has a decrypted `data/data.json`, the data is cryptographically
+  gone — keep one owner machine with a working `.secrets`.
+- **The M365 connector disconnects every so often** (corporate token policy — it
+  happened twice in the tracker's first week, and one stand-up went unprocessed
+  overnight because of it). Symptom: the daily run reports it can't reach
+  transcripts. Fix: reconnect at claude.ai/customize/connectors. The next run
+  catches up missed days automatically.
+- **The edit key expires** (fine-grained PATs max out around a year). Symptom:
+  page edits fail with "edit key was rejected." Fix: new PAT →
+  `node scripts/publish-edit-key.mjs`. Put a reminder ~11 months out.
+- **The cloud cron is fixed UTC** (14:00). After the November time change it
+  fires at 8:08 AM Central — during the call — but it polls for the transcript,
+  so it still lands. Shift the cron an hour if the early report bothers anyone.
+- **Conventions live in CLAUDE.md** — transcript speaker-label gotchas (Teams
+  mislabels names; there are two Johns), action-item id spaces
+  (`ai-YYYYMMDD-NN` = pipeline, `-wNN` = web-created; never renumber), completed
+  items staying visible until the next call is processed, risk id slugs. Any
+  Claude Code session in the repo reads it automatically — it is the project's
+  durable brain. (Claude's per-machine "memory" does NOT transfer; CLAUDE.md is
+  what matters.)
+- **Public repo discipline**: never commit transcripts (any format), the Excel
+  file, `data/data.json`, or `.secrets/` — the `.gitignore` enforces this; don't
+  fight it. Meeting content belongs ONLY inside the encrypted blob.
+- **The old Excel "AM.PM Action Tracker" registry** (long-running
+  issues/decisions log) was never ported — the tracker's Risks card carries the
+  active items. The historical registry stays in the Excel file if anyone asks.
+- **Page footer shows the app version** — if a user reports something odd, first
+  ask what version their footer shows; a hard refresh (Ctrl+F5) cures stale
+  caches.
+
+## 6. People
+
+- **Kate Mentzer** — meeting organizer, owns the risks section on the call, and
+  runs transcription. If the successor changes, she should know (she's also the
+  natural escalation if transcripts stop appearing).
+- **The team** — needs nothing for the handoff except (possibly) a new page URL
+  if the repo moves. Their passphrase and habits don't change.
+
+## 7. Successor's 30-minute checklist
+
+- [ ] Get the passphrase (verbally) and an invite to the daily meeting
+- [ ] Clone the repo; create `.secrets/passphrase.txt`; `node scripts/sync.mjs` decrypts cleanly
+- [ ] Repo transferred to me / I'm admin (if transferred: Pages re-enabled,
+      `CONFIG.owner` updated, team has the new URL)
+- [ ] My fine-grained PAT created; `node scripts/publish-edit-key.mjs` run
+- [ ] My Microsoft 365 connector connected (claude.ai + desktop app)
+- [ ] Cloud routine + local fallback recreated under my accounts (ask Claude Code)
+- [ ] Watched one full green morning cycle (call → 9:08 run → page updated)
+- [ ] Old owner completed Phase 3 decommission
