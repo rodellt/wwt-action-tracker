@@ -62,8 +62,39 @@ if (!/^(github_pat_|ghp_)/.test(token)) {
   process.exit(1);
 }
 
+// Validate the token against GitHub and record its expiry (the page shows a
+// countdown from this). Header format: "2027-07-14 17:03:09 UTC"; absent = no expiry.
+let expires;
+try {
+  const remote = execSync('git remote get-url origin', { cwd: root }).toString().trim();
+  const m = remote.match(/github\.com[:/]+([^/]+)\/([^/.]+)/);
+  const res = await fetch(`https://api.github.com/repos/${m[1]}/${m[2]}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  if (res.status === 401 || res.status === 403) {
+    console.error('GitHub rejected that token — double-check it and try again.');
+    process.exit(1);
+  }
+  const h = res.headers.get('github-authentication-token-expiration');
+  if (h) {
+    const d = new Date(h.replace(' UTC', 'Z').replace(' ', 'T'));
+    expires = (Number.isNaN(d.getTime()) ? new Date(h) : d).toISOString();
+    console.log(`Token verified. Expires ${expires.slice(0, 10)} — the page will show a countdown.`);
+  } else {
+    expires = null;
+    console.log('Token verified. No expiration — nothing will ever need renewing.');
+  }
+} catch {
+  console.log('Could not verify the token expiry (offline?) — publishing without it.');
+}
+
 const envelope = await encryptEnvelope(
-  { token, created: new Date().toISOString(), by: 'publish-edit-key script' },
+  {
+    token,
+    created: new Date().toISOString(),
+    by: 'publish-edit-key script',
+    ...(expires !== undefined ? { expires } : {}),
+  },
   passphrase()
 );
 git('pull --rebase');

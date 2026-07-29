@@ -8,7 +8,7 @@
 (() => {
 'use strict';
 
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -31,6 +31,8 @@ const state = {
   data: null,       // decrypted tracker object
   passphrase: null,
   teamToken: null,  // shared write token, decrypted from data/edit-key.enc.json
+  // Edit-key expiry: ISO string = known date · null = never expires · undefined = unknown
+  teamKeyExpires: undefined,
   busy: false,
 };
 
@@ -185,11 +187,51 @@ async function loadTeamKey() {
     try {
       const env = await fn();
       const obj = await decryptEnvelope(env, state.passphrase);
-      if (obj?.token) { state.teamToken = obj.token; return true; }
+      if (obj?.token) {
+        state.teamToken = obj.token;
+        if (obj.expires !== undefined) {
+          state.teamKeyExpires = obj.expires; // recorded at publish time (null = never)
+          renderKeyCountdown();
+        } else {
+          probeKeyExpiry(obj.token); // older envelope — ask GitHub directly
+        }
+        return true;
+      }
     } catch { /* try the next source; a 404 just means no key is published */ }
   }
   state.teamToken = null;
   return false;
+}
+// GitHub reports a token's expiry in the github-authentication-token-expiration
+// response header (format like "2027-07-14 17:03:09 UTC"). Absent in the browser
+// can mean either "no expiry" or "header not exposed" — so treat it as unknown.
+async function probeKeyExpiry(token) {
+  try {
+    const res = await fetchWithTimeout(`https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}`, { headers: ghHeaders(token) });
+    const h = res.headers.get('github-authentication-token-expiration');
+    if (h) {
+      const iso = new Date(h.replace(' UTC', 'Z').replace(' ', 'T'));
+      state.teamKeyExpires = Number.isNaN(iso.getTime()) ? new Date(h).toISOString() : iso.toISOString();
+    }
+  } catch { /* stays unknown */ }
+  renderKeyCountdown();
+}
+function keyDaysLeft() {
+  if (!state.teamKeyExpires) return null;
+  return Math.ceil((new Date(state.teamKeyExpires).getTime() - Date.now()) / 86400000);
+}
+function renderKeyCountdown() {
+  const el = $('#footer-key');
+  if (!el) return;
+  const days = keyDaysLeft();
+  if (days === null) { el.innerHTML = ''; return; }
+  const renewHint = 'Renew: new fine-grained GitHub token, then run node scripts/publish-edit-key.mjs (~2 minutes)';
+  if (days < 0) {
+    el.innerHTML = ` · <span class="key-red" title="${esc(renewHint)}">⚠ edit key expired</span>`;
+  } else {
+    const cls = days <= 7 ? 'key-red' : days <= 30 ? 'key-amber' : '';
+    el.innerHTML = ` · <span class="${cls}" title="${esc(renewHint)}">edit key renews in ${days}d</span>`;
+  }
 }
 // Publishing / removing the key is done from a terminal:
 //   node scripts/publish-edit-key.mjs [--remove]
@@ -561,6 +603,7 @@ function renderTeam() {
 
 function renderFooter() {
   $('#footer-updated').textContent = `Data updated ${fmtStamp(state.data.lastUpdated)} · v${APP_VERSION}`;
+  renderKeyCountdown();
   const repo = $('#footer-repo');
   repo.href = `https://github.com/${CONFIG.owner}/${CONFIG.repo}`;
 }
@@ -887,6 +930,17 @@ function historyModal() {
 
 function settingsModal() {
   const name = getLS(LS.name) ?? '';
+  let keyLine = '';
+  if (state.teamToken && state.teamKeyExpires !== undefined) {
+    if (state.teamKeyExpires === null) {
+      keyLine = 'The shared edit key has no expiration.';
+    } else {
+      const d = keyDaysLeft();
+      keyLine = d < 0
+        ? '⚠ The shared edit key has <b>expired</b> — the owner needs to publish a fresh one (new fine-grained GitHub token → <code>node scripts/publish-edit-key.mjs</code>).'
+        : `The shared edit key renews in <b>${d} day${d === 1 ? '' : 's'}</b> (${esc(fmtDay(state.teamKeyExpires.slice(0, 10), { month: 'short', day: 'numeric', year: 'numeric' }))}). Renewal takes ~2 minutes: new fine-grained GitHub token → <code>node scripts/publish-edit-key.mjs</code>.`;
+    }
+  }
   const root = openModal(`
     <div class="modal-head"><h2>Settings</h2><button class="modal-close" data-close>×</button></div>
     <label for="set-name">Your name (shown on items you complete or edit)</label>
@@ -894,6 +948,7 @@ function settingsModal() {
     <p class="hint" style="margin-top:10px">${state.teamToken
       ? '✓ <b>Editing is on.</b> Anyone who unlocks this page can complete, edit, and add items — changes save for everyone automatically.'
       : 'Shared editing isn’t set up yet — completing items still works on this device, and everything syncs with the next morning’s update.'}</p>
+    ${keyLine ? `<p class="hint" style="margin-top:4px">${keyLine}</p>` : ''}
     <div class="settings-info">
       <b>How it works.</b> The tracker is a single encrypted file on GitHub. Unlocking the page with the team passphrase is all you need — completes, edits, and new items save for the whole team instantly. Items closed verbally on the stand-up are picked up from the transcript each morning.
     </div>

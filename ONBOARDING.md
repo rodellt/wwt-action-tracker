@@ -127,9 +127,12 @@ Everything else transfers automatically with the repo.
   overnight because of it). Symptom: the daily run reports it can't reach
   transcripts. Fix: reconnect at claude.ai/customize/connectors. The next run
   catches up missed days automatically.
-- **The edit key expires** (fine-grained PATs max out around a year). Symptom:
-  page edits fail with "edit key was rejected." Fix: new PAT →
-  `node scripts/publish-edit-key.mjs`. Put a reminder ~11 months out.
+- **The edit key expires** (fine-grained PATs max out around a year). The page
+  footer shows a live countdown ("edit key renews in Nd" — amber under 30 days,
+  red under 7) and Settings shows the exact date; `publish-edit-key.mjs` records
+  the expiry each time a key is published. Fix when it's close: new PAT →
+  `node scripts/publish-edit-key.mjs`. (A no-expiry machine-account token makes
+  the countdown unnecessary — the page then shows nothing to renew.)
 - **The cloud cron is fixed UTC** (14:00). After the November time change it
   fires at 8:08 AM Central — during the call — but it polls for the transcript,
   so it still lands. Shift the cron an hour if the early report bothers anyone.
