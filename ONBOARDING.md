@@ -117,9 +117,12 @@ Everything else transfers automatically with the repo.
 ## 5. Things the new owner must know (learned the hard way)
 
 - **The passphrase is the crown jewel.** It grants read AND edit (via the edit
-  key). It's in no file that's committed. If it must rotate: update
-  `.secrets/passphrase.txt`, run `node scripts/publish.mjs`, re-run
-  `node scripts/publish-edit-key.mjs`, tell the team. If it's ever *lost* and no
+  key). It's in no file that's committed. To rotate it: `git pull` +
+  `node scripts/sync.mjs`, then `node scripts/rotate-passphrase.mjs <new>` (it
+  re-encrypts the data AND the edit key in one pass), commit/push the two
+  `data/*.enc.json` files, update the passphrase line in the cloud routine's
+  instructions (claude.ai/code/routines), and tell the team — everyone re-enters
+  it once. If it's ever *lost* and no
   machine still has a decrypted `data/data.json`, the data is cryptographically
   gone — keep one owner machine with a working `.secrets`.
 - **The M365 connector disconnects every so often** (corporate token policy — it
