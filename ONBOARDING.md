@@ -14,9 +14,16 @@
 > deliberately written nowhere).
 >
 > **On GitHub (your account):**
-> 1. Accept the repository transfer — Tyler initiates it from his repo settings;
->    you'll get an email from GitHub, click accept. The repo appears at
->    `github.com/<your-username>/wwt-action-tracker`.
+> 1. Copy the repository to your account (no transfer needed — it's public):
+>    go to **github.com/new/import**, paste the source URL
+>    `https://github.com/rodellt/wwt-action-tracker`, set owner = you, name =
+>    `wwt-action-tracker`, visibility Public → Begin import. A few minutes later
+>    the full project with its history lives at
+>    `github.com/<your-username>/wwt-action-tracker`, entirely yours.
+>    ⚠ Timing: do this AFTER the morning's ~9:08 auto-update, and finish the
+>    whole checklist the same sitting — edits made on the OLD page after this
+>    copy won't carry over, so the team should hold edits until you send the
+>    new URL.
 > 2. Re-enable the website: repo → Settings → Pages → Source "Deploy from a
 >    branch" → branch `main`, folder `/ (root)` → Save. (Pages settings don't
 >    survive a transfer.) The team's new URL becomes
@@ -156,6 +163,11 @@ Everything else transfers automatically with the repo.
   their machine.
 
 ### Phase 3 — Decommission (old owner, after verification)
+- [ ] If the repo was COPIED rather than transferred: unpublish the old Pages
+      site (old repo → Settings → Pages → unpublish deployment) and archive the
+      old repo (Settings → General → Archive) so the stale page and stray edits
+      die immediately; delete it entirely once the successor's copy has run
+      green for a week.
 - [ ] Revoke the old fine-grained PAT on GitHub (page edits should still work —
       they're on the successor's key now; if they break, re-run step 3).
 - [ ] Delete the old cloud routine (claude.ai/code/routines) and the local
