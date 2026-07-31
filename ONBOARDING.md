@@ -1,5 +1,56 @@
 # Cox HPT Stand-Up Tracker — Handoff Guide
 
+> ## Kate's quickstart (handoff of July 2026)
+>
+> Kate — this whole takeover is about 30 minutes at a keyboard, ideally with
+> Tyler on a call for the first ten. Work top to bottom; every step is expanded
+> in the full guide below. **Easiest path: open this repo folder in Claude Code
+> and ask it to walk you through this checklist — it can do most steps for you.**
+>
+> **Before you start you need:** a GitHub account (free — github.com/signup);
+> the Claude desktop app with Claude Code (your seat needs cloud routines + the
+> Microsoft 365 connector — check with IT/Tyler if unsure); git + Node 18+
+> installed; and Tyler on the phone to tell you the team passphrase (it is
+> deliberately written nowhere).
+>
+> **On GitHub (your account):**
+> 1. Accept the repository transfer — Tyler initiates it from his repo settings;
+>    you'll get an email from GitHub, click accept. The repo appears at
+>    `github.com/<your-username>/wwt-action-tracker`.
+> 2. Re-enable the website: repo → Settings → Pages → Source "Deploy from a
+>    branch" → branch `main`, folder `/ (root)` → Save. (Pages settings don't
+>    survive a transfer.) The team's new URL becomes
+>    `https://<your-username>.github.io/wwt-action-tracker/`.
+> 3. Create your edit token: github.com/settings/personal-access-tokens/new →
+>    name `hpt-tracker-edit-key`, Expiration: custom ~1 year, Repository access:
+>    "Only select repositories" → `wwt-action-tracker`, Permissions → Contents:
+>    **Read and write** (nothing else). Generate, copy — you'll paste it in step 7.
+>
+> **On your machine:**
+> 4. `git clone https://github.com/<your-username>/wwt-action-tracker` and open
+>    the folder in Claude Code.
+> 5. Make a `.secrets` folder in it; put the passphrase Tyler gives you (one
+>    line) in `.secrets/passphrase.txt`.
+> 6. Prove it works: `node scripts/sync.mjs` → should print "Decrypted …".
+> 7. Point the site at your account: ask Claude Code — *"the repo now lives
+>    under `<your-username>` — update CONFIG.owner in js/app.js, sweep the old
+>    owner from the docs, bump the cache-busters, commit and push."*
+> 8. Publish your edit token: `node scripts/publish-edit-key.mjs` → paste the
+>    token from step 3. Team editing now runs on your credential.
+>
+> **On Claude:**
+> 9. Connect the Microsoft 365 connector (sign in with your WWT account) at
+>    claude.ai/customize/connectors — this is how the daily transcript is read
+>    (read-only).
+> 10. Ask Claude Code: *"Recreate the daily cloud routine and the local fallback
+>     task for this tracker per CLAUDE.md's SCHEDULED DAILY RUN section."* Run
+>     the routine once manually to see a green report.
+>
+> **Finish:** send the team the new page URL (same passphrase — they'll type it
+> once per device); watch one full morning cycle (8:00 call → ~9:08 auto-update);
+> then tell Tyler so he can decommission his credentials (checklist in §4,
+> Phase 3 below).
+
 This is the complete handoff package: what the system is, every component and the
 account it's tied to, how it runs day to day, and a phased plan for transferring
 ownership without the team noticing a bump. The takeover itself is ~30 minutes of
