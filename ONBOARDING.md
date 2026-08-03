@@ -40,8 +40,9 @@
 >    line) in `.secrets/passphrase.txt`.
 > 6. Prove it works: `node scripts/sync.mjs` → should print "Decrypted …".
 > 7. Point the site at your account: ask Claude Code — *"the repo now lives
->    under `<your-username>` — update CONFIG.owner in js/app.js, sweep the old
->    owner from the docs, bump the cache-busters, commit and push."*
+>    under `<your-username>` — update CONFIG.owner AND CONFIG.syncEmail (my
+>    WWT email — team sync mails go there) in js/app.js, sweep the old owner
+>    from the docs, bump the cache-busters, commit and push."*
 > 8. Publish your edit token: `node scripts/publish-edit-key.mjs` → paste the
 >    token from step 3. Team editing now runs on your credential.
 >
@@ -65,6 +66,14 @@ work plus a couple of days of watching it run.
 
 **Live page:** https://rodellt.github.io/wwt-action-tracker/
 **Repo:** https://github.com/rodellt/wwt-action-tracker
+
+> **Since v2.0 the team's copy is a FILE, not a URL:** every morning the
+> routine rebuilds `HPT-Tracker.html` (self-contained, encrypted snapshot
+> embedded) and uploads it to the **Cox HPT Teams channel** — that file is what
+> the team opens, since GitHub Enterprise blocks github.io for users. Their
+> edits queue inside the file and come back as `HPT-SYNC` emails to the owner's
+> mailbox, applied automatically at the next run. GitHub Pages still works as
+> the owner's live view.
 
 ## 1. What this is
 

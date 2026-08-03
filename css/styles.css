@@ -157,6 +157,7 @@ button { font: inherit; }
 .brand-sub { font-size: 11.5px; color: var(--text-2); letter-spacing: .04em; text-transform: uppercase; }
 .topbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .asof { font-size: 12.5px; color: var(--text-3); margin-right: 4px; white-space: nowrap; }
+.asof.snapshot { color: var(--warn); font-weight: 600; }
 
 /* Team jump navigation */
 .groupnav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }

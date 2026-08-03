@@ -1,14 +1,18 @@
 /* Cox HPT Daily Stand-Up Tracker
- * Static app served from GitHub Pages. Data lives in data/data.enc.json
- * (AES-256-GCM, key derived from the team passphrase via PBKDF2-SHA256).
- * Completing an item with a GitHub token saves for everyone by committing
- * the re-encrypted file through the GitHub Contents API; without a token,
- * completions are kept on this device only until the next transcript update.
+ * Runs two ways from the same code:
+ *  - hosted (GitHub Pages), fetching data/data.enc.json live; or
+ *  - as a distributable single file (dist/HPT-Tracker.html) with the encrypted
+ *    snapshot embedded — openable from SharePoint/Teams/file:// with no server.
+ * Data is AES-256-GCM, key derived from the team passphrase via PBKDF2-SHA256.
+ * Saving: with the shared edit key reachable, changes commit to GitHub live;
+ * otherwise they apply on-device and queue as "sync ops" that the user emails
+ * to the tracker owner (Send sync), where the next morning's automated run
+ * applies them for everyone.
  */
 (() => {
 'use strict';
 
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '2.0.0';
 
 const CONFIG = {
   owner: 'rodellt',
@@ -16,6 +20,7 @@ const CONFIG = {
   branch: 'main',
   dataPath: 'data/data.enc.json',
   editKeyPath: 'data/edit-key.enc.json',
+  syncEmail: 'Tyler.Rodell@wwt.com', // where Send sync mails go (the tracker owner)
 };
 
 const LS = {
@@ -23,8 +28,13 @@ const LS = {
   pat: 'hpt.pat',
   name: 'hpt.name',
   theme: 'hpt.theme',
-  localDone: 'hpt.localDone',
+  localDone: 'hpt.localDone',   // legacy (pre-2.0) — migrated into ops at unlock
+  ops: 'hpt.pendingOps',
 };
+
+const EMBEDDED = typeof window !== 'undefined' ? (window.__HPT_EMBEDDED ?? null) : null;
+// ?snapshot forces distributed-file behavior over http — used for testing.
+const IS_FILE = location.protocol === 'file:' || new URLSearchParams(location.search).has('snapshot');
 
 const state = {
   env: null,        // encrypted envelope as fetched
@@ -33,6 +43,7 @@ const state = {
   teamToken: null,  // shared write token, decrypted from data/edit-key.enc.json
   // Edit-key expiry: ISO string = known date · null = never expires · undefined = unknown
   teamKeyExpires: undefined,
+  snapshot: false,  // true when showing the embedded snapshot rather than live data
   busy: false,
 };
 
@@ -111,8 +122,12 @@ function hueFor(id) {
 }
 function getLS(k, fallback = null) { try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; } }
 function setLS(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
-function localDone() { try { return JSON.parse(getLS(LS.localDone, '{}')); } catch { return {}; } }
-function setLocalDone(map) { setLS(LS.localDone, JSON.stringify(map)); }
+function pendingOps() { try { return JSON.parse(getLS(LS.ops, '[]')); } catch { return []; } }
+function setPendingOps(list) { setLS(LS.ops, JSON.stringify(list)); renderSyncButton(); }
+function newUuid() {
+  try { return crypto.randomUUID(); }
+  catch { return `op-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`; }
+}
 
 function toast(msg, kind = '') {
   const el = document.createElement('div');
@@ -178,6 +193,8 @@ function effectiveToken() {
   return state.teamToken || getLS(LS.pat);
 }
 async function loadTeamKey() {
+  // ?nokey simulates a network where GitHub is unreachable — testing/demo hook.
+  if (new URLSearchParams(location.search).has('nokey')) { state.teamToken = null; return false; }
   const sources = [
     () => fetchViaSite(CONFIG.editKeyPath),
     () => fetchViaRaw(CONFIG.editKeyPath),
@@ -235,12 +252,12 @@ function renderKeyCountdown() {
 }
 // Publishing / removing the key is done from a terminal:
 //   node scripts/publish-edit-key.mjs [--remove]
-async function fetchEnvelope() {
+async function fetchEnvelopeLive() {
   const pat = getLS(LS.pat);
   const failures = [];
   const sources = [
     ...(pat ? [['GitHub API (token)', () => fetchViaApi(pat)]] : []),
-    ['site data file', fetchViaSite],
+    ...(IS_FILE ? [] : [['site data file', fetchViaSite]]),
     ['GitHub API', () => fetchViaApi(null)],
     ['raw.githubusercontent', fetchViaRaw],
   ];
@@ -249,6 +266,41 @@ async function fetchEnvelope() {
     catch (e) { failures.push(`${name}: ${e.message}`); }
   }
   throw new Error(failures.join(' · '));
+}
+async function fetchEnvelope() {
+  // Distributed single file: paint instantly from the embedded snapshot; a
+  // background freshness check runs after unlock (see showApp).
+  if (IS_FILE && EMBEDDED) {
+    state.snapshot = true;
+    return EMBEDDED;
+  }
+  try {
+    const env = await fetchEnvelopeLive();
+    state.snapshot = false;
+    return env;
+  } catch (e) {
+    if (EMBEDDED) { state.snapshot = true; return EMBEDDED; }
+    throw e;
+  }
+}
+// From a snapshot, quietly look for fresher live data and hot-swap it in.
+async function refreshFromLive(announce = false) {
+  try {
+    const env = await fetchEnvelopeLive();
+    if ((env.lastUpdated ?? '') > (state.env?.lastUpdated ?? '')) {
+      state.env = env;
+      await tryUnlock(state.passphrase);
+      state.snapshot = false;
+      render();
+      toast('Live data loaded — newer than this file’s snapshot.', 'ok');
+    } else if (announce) {
+      state.snapshot = false;
+      renderTopbar();
+      toast('This file’s snapshot is already the latest data.', 'ok');
+    }
+  } catch (e) {
+    if (announce) toast(`No live connection — showing the snapshot from ${fmtStamp(state.data.lastUpdated)}.`, 'warn');
+  }
 }
 
 /* ---------------- remote mutation (complete / reopen) ---------------- */
@@ -287,6 +339,156 @@ async function remoteMutate(mutator, message) {
   throw new Error('Could not save after several tries — someone else may be editing. Refresh and try again.');
 }
 
+/* ---------------- offline sync ops (Send sync) ----------------
+ * With no reachable edit key (e.g. the distributed file on a network that
+ * blocks GitHub), changes apply on-device and queue as ops. "Send sync" opens
+ * a pre-filled Outlook draft to CONFIG.syncEmail; the next automated run
+ * applies the ops for everyone and records their ids in data.appliedOps,
+ * which is how devices know to drop them from the queue. */
+function baseOp(kind, extra) {
+  return { id: newUuid(), ts: new Date().toISOString(), by: editorName(), kind, ...extra };
+}
+function enqueueOp(op) {
+  applyOpLocal(state.data, op);
+  setPendingOps([...pendingOps(), op]);
+}
+function pendingCompleteOp(itemId) {
+  return pendingOps().find(o => o.kind === 'complete' && o.itemId === itemId);
+}
+function applyOpLocal(d, op) {
+  const item = (id) => d.actionItems.find(i => i.id === id);
+  switch (op.kind) {
+    case 'complete': {
+      const it = item(op.itemId); if (!it) return;
+      it.status = 'completed';
+      it.completed = { date: op.ts.slice(0, 10), method: 'manual', by: op.by, ...(op.note ? { note: op.note } : {}) };
+      it._pending = true;
+      break;
+    }
+    case 'reopen': {
+      const it = item(op.itemId); if (!it) return;
+      it.status = 'open'; it.completed = null; it._pending = true;
+      break;
+    }
+    case 'item-edit': {
+      const it = item(op.itemId); if (!it) return;
+      it.text = op.text;
+      if (op.detail) it.detail = op.detail; else delete it.detail;
+      it.owner = op.owner; it._pending = true;
+      break;
+    }
+    case 'item-add': {
+      if (d.actionItems.some(i => i._op === op.id)) return;
+      d.actionItems.unshift({
+        id: nextWebAiId(d), _op: op.id, owner: op.owner, text: op.text,
+        ...(op.detail ? { detail: op.detail } : {}),
+        created: op.ts.slice(0, 10), source: `web — ${op.by}`, status: 'open', completed: null, _pending: true,
+      });
+      break;
+    }
+    case 'item-delete': {
+      const idx = d.actionItems.findIndex(i => i.id === op.itemId);
+      if (idx >= 0) d.actionItems.splice(idx, 1);
+      break;
+    }
+    case 'risk-edit': {
+      const r = d.risks.find(x => x.id === op.riskId); if (!r) return;
+      r.title = op.title;
+      if (op.detail) r.detail = op.detail; else delete r.detail;
+      if (op.note) r.lastUpdateNote = op.note; else delete r.lastUpdateNote;
+      r.lastUpdate = op.ts.slice(0, 10); r._pending = true;
+      break;
+    }
+    case 'risk-add': {
+      if (d.risks.some(x => x._op === op.id)) return;
+      d.risks.push({
+        id: newRiskId(d, op.title), _op: op.id, title: op.title,
+        ...(op.detail ? { detail: op.detail } : {}),
+        lastUpdate: op.ts.slice(0, 10),
+        ...(op.note ? { lastUpdateNote: op.note } : {}),
+        _pending: true,
+      });
+      break;
+    }
+    case 'risk-delete': {
+      const idx = d.risks.findIndex(x => x.id === op.riskId);
+      if (idx >= 0) d.risks.splice(idx, 1);
+      break;
+    }
+    case 'aps-edit': {
+      const taken = op.stages.map(s => s.id).filter(Boolean);
+      d.advancedPurchase.stages = op.stages.map(s => {
+        const id = s.id ?? nextStageId(d, taken);
+        if (!s.id) taken.push(id);
+        return { id, label: s.label, ...(s.note ? { note: s.note } : {}) };
+      });
+      d.advancedPurchase.lastVerified = op.ts.slice(0, 10);
+      if (op.footnote) d.advancedPurchase.lastVerifiedNote = op.footnote;
+      else delete d.advancedPurchase.lastVerifiedNote;
+      d.advancedPurchase._pending = true;
+      break;
+    }
+  }
+}
+function replayPendingOps() {
+  // one-time migration of pre-2.0 device-local completions into ops
+  try {
+    const legacy = JSON.parse(getLS(LS.localDone, 'null'));
+    if (legacy && typeof legacy === 'object') {
+      const migrated = Object.entries(legacy).map(([itemId, c]) => ({
+        id: newUuid(), ts: `${c.date ?? todayStr()}T12:00:00.000Z`, by: c.by ?? 'web',
+        kind: 'complete', itemId, ...(c.note ? { note: c.note } : {}),
+      }));
+      if (migrated.length) setPendingOps([...pendingOps(), ...migrated]);
+      setLS(LS.localDone, null);
+    }
+  } catch { /* ignore corrupt legacy state */ }
+  const applied = new Set(state.data.appliedOps ?? []);
+  const cutoff = Date.now() - 14 * 86400000;
+  const keep = pendingOps().filter(op => {
+    if (applied.has(op.id)) return false;              // landed in shared data
+    if (new Date(op.ts).getTime() < cutoff) return false; // stale — let it go
+    if (op.kind === 'complete') {
+      const it = state.data.actionItems.find(i => i.id === op.itemId);
+      if (!it || it.status === 'completed') return false; // already done upstream
+    }
+    return true;
+  });
+  for (const op of keep) applyOpLocal(state.data, op);
+  setPendingOps(keep);
+}
+function sendSync() {
+  const unsent = pendingOps().filter(o => !o.sentAt);
+  if (!unsent.length) return;
+  // mailto bodies have tight length limits — send in chunks if needed
+  const batch = [];
+  let payload = '';
+  for (const op of unsent) {
+    const trial = bytesToB64(te.encode(JSON.stringify([...batch, op])));
+    if (batch.length && trial.length > 1400) break;
+    batch.push(op);
+    payload = trial;
+  }
+  const body =
+    'Tracker edit sync — just hit Send; these changes are applied for everyone at the next tracker update.\n\n' +
+    `HPT-OPS:${payload}:END`;
+  const url = `mailto:${CONFIG.syncEmail}?subject=${encodeURIComponent(`HPT-SYNC ${todayStr()}`)}&body=${encodeURIComponent(body)}`;
+  const ids = new Set(batch.map(o => o.id));
+  setPendingOps(pendingOps().map(o => (ids.has(o.id) ? { ...o, sentAt: new Date().toISOString() } : o)));
+  window.location.href = url;
+  const rest = unsent.length - batch.length;
+  toast(rest > 0
+    ? `Outlook draft opened — hit Send there, then tap Send sync again for the remaining ${rest}.`
+    : 'Outlook draft opened — hit Send there and you’re done.', 'ok');
+}
+function renderSyncButton() {
+  const btn = $('#btn-sendsync');
+  if (!btn) return;
+  const unsent = pendingOps().filter(o => !o.sentAt).length;
+  btn.hidden = unsent === 0;
+  btn.textContent = `📤 Send sync (${unsent})`;
+}
+
 /* ---------------- domain helpers ---------------- */
 const memberById = (id) => state.data.members.find(m => m.id === id);
 const latestMeeting = () => state.data.meetings[0];
@@ -311,15 +513,12 @@ function upcomingPto(memberId) {
   return (state.data.pto ?? []).find(p => p.member === memberId && p.start > t && p.start <= horizon);
 }
 function openItems(memberId) {
-  const ld = localDone();
-  return state.data.actionItems.filter(i => i.owner === memberId && i.status === 'open' && !ld[i.id]);
+  return state.data.actionItems.filter(i => i.owner === memberId && i.status === 'open');
 }
 function doneItems(memberId) {
-  const ld = localDone();
-  const remote = state.data.actionItems.filter(i => i.owner === memberId && i.status === 'completed');
-  const local = state.data.actionItems.filter(i => i.owner === memberId && i.status === 'open' && ld[i.id])
-    .map(i => ({ ...i, _local: true, completed: ld[i.id] }));
-  return [...local, ...remote].sort((a, b) => (b.completed?.date ?? '').localeCompare(a.completed?.date ?? ''));
+  return state.data.actionItems
+    .filter(i => i.owner === memberId && i.status === 'completed')
+    .sort((a, b) => (b.completed?.date ?? '').localeCompare(a.completed?.date ?? ''));
 }
 // Completions on/after the latest processed meeting stay visible inline until the
 // next day's call is processed; everything older lives in the collapsed fold.
@@ -334,9 +533,9 @@ function splitDone(memberId) {
 
 /* ---------------- editing helpers ---------------- */
 function requireWrite() {
-  if (effectiveToken()) return true;
-  toast('Shared editing isn’t set up on this tracker yet — ask Tyler (it’s a one-time step).', 'warn');
-  return false;
+  // Editing always works in 2.0: live via the edit key when reachable,
+  // otherwise on-device with a queued sync op. Kept for call-site symmetry.
+  return true;
 }
 function editorName() { return getLS(LS.name) || 'web'; }
 
@@ -366,17 +565,31 @@ function nextStageId(d, takenIds) {
   return `aps-${max + 1}`;
 }
 
-async function saveViaMutate(btn, mutator, message, okMsg) {
+const isNetErr = (m) => /no-token|timed out|network|read failed|Failed to fetch/i.test(String(m));
+
+// Dual-path save: live GitHub commit when the edit key is reachable, otherwise
+// apply on-device and queue the op for the morning sync run ("Send sync").
+async function saveViaMutate(btn, mutator, op, message, okMsg) {
   btn.disabled = true;
+  let tok = effectiveToken();
+  if (!tok && !state.snapshot) { await loadTeamKey(); tok = effectiveToken(); }
+  if (!tok) { queueAndClose(op); return; }
   try {
     await remoteMutate(mutator, message);
     closeModal();
     render();
     toast(okMsg, 'ok');
   } catch (err) {
+    if (isNetErr(err.message)) { queueAndClose(op); return; }
     btn.disabled = false;
-    toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
+    toast(err.message, 'warn');
   }
+}
+function queueAndClose(op) {
+  enqueueOp(op);
+  closeModal();
+  render();
+  toast('Saved on this device — tap “📤 Send sync” up top to share it with the team.', 'ok');
 }
 
 // Two-step in-place delete: first click arms, second click (within 4s) confirms.
@@ -450,7 +663,15 @@ function renderGroupNav() {
 }
 
 function renderTopbar() {
-  $('#asof').textContent = `Updated ${fmtStamp(state.data.lastUpdated)}`;
+  const el = $('#asof');
+  if (state.snapshot) {
+    el.textContent = `Snapshot · data as of ${fmtStamp(state.data.lastUpdated)}`;
+    el.classList.add('snapshot');
+  } else {
+    el.textContent = `Updated ${fmtStamp(state.data.lastUpdated)}`;
+    el.classList.remove('snapshot');
+  }
+  renderSyncButton();
 }
 
 function renderAvailability() {
@@ -507,8 +728,7 @@ function renderRisks() {
 }
 
 function renderOpenSummary() {
-  const ld = localDone();
-  const open = state.data.actionItems.filter(i => i.status === 'open' && !ld[i.id]);
+  const open = state.data.actionItems.filter(i => i.status === 'open');
   const mtg = latestMeeting();
   $('#open-summary').innerHTML =
     `<b>${open.length}</b> open action item${open.length === 1 ? '' : 's'} across the team · latest stand-up: <b>${esc(fmtDay(mtg.date, { weekday: 'long', month: 'long', day: 'numeric' }))}</b>${mtg.durationMin ? ` (${mtg.durationMin} min)` : ''}`;
@@ -519,12 +739,13 @@ function aiItemHtml(item, done) {
   const age = ageDays(item.created);
   // Compact row: just the title plus a tiny age/status tag. The full meta line
   // and any detail/completion note live behind the chevron.
+  const pendingFlag = item._pending ? ' <span class="local-flag" title="Saved on this device — use Send sync to share it">⏳</span>' : '';
   const tag = done
-    ? `${c?.method === 'verbal' ? '🗣' : '✓'} ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${item._local ? ' <span class="local-flag">local</span>' : ''}`
-    : `<span class="${age >= 3 ? 'age-hot' : ''}">${age}d</span>`;
+    ? `${c?.method === 'verbal' ? '🗣' : '✓'} ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${pendingFlag}`
+    : `<span class="${age >= 3 ? 'age-hot' : ''}">${age}d</span>${pendingFlag}`;
   const meta = done
-    ? `Completed ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${c?.method ? ` · ${c.method === 'verbal' ? '🗣 verbal (from transcript)' : '✓ manual'}` : ''}${item._local ? ' · <span class="local-flag">this device only</span>' : ''}`
-    : `Raised ${fmtDay(item.created, { month: 'short', day: 'numeric' })}${item.source ? ` · ${esc(item.source)}` : ''}`;
+    ? `Completed ${fmtDay(c?.date, { month: 'short', day: 'numeric' })}${c?.method ? ` · ${c.method === 'verbal' ? '🗣 verbal (from transcript)' : '✓ manual'}` : ''}${item._pending ? ' · <span class="local-flag">awaiting sync</span>' : ''}`
+    : `Raised ${fmtDay(item.created, { month: 'short', day: 'numeric' })}${item.source ? ` · ${esc(item.source)}` : ''}${item._pending ? ' · <span class="local-flag">awaiting sync</span>' : ''}`;
   const extra = (done ? [c?.note, item.detail] : [item.detail]).filter(Boolean);
   return `
     <li class="ai-item ${done ? 'done' : ''} ${expandedItems.has(item.id) ? 'expanded' : ''}" data-id="${esc(item.id)}">
@@ -653,7 +874,7 @@ function confirmCompleteModal(item) {
     <textarea id="complete-note" rows="1" data-single placeholder="e.g. shipped this morning"></textarea>
     <p class="hint">${canWrite
       ? 'Saves for the whole team — this commits the update to GitHub.'
-      : '⚠ Shared editing isn’t enabled on this page, so this is saved <b>on this device only</b>. It will still count as done here, and it gets baked in for everyone with the next transcript update.'}</p>
+      : 'Checks off on this device right away — tap “📤 Send sync” afterwards and it lands for the whole team at the next update.'}</p>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="complete-go">Mark complete</button>
@@ -662,36 +883,36 @@ function confirmCompleteModal(item) {
     const btn = e.currentTarget;
     btn.disabled = true;
     const note = oneLine(root.querySelector('#complete-note').value);
-    const by = getLS(LS.name) || 'web';
-    if (canWrite) {
-      try {
-        await remoteMutate((d) => {
-          const it = d.actionItems.find(i => i.id === item.id);
-          if (!it) throw new Error('Item no longer exists — refresh.');
-          it.status = 'completed';
-          it.completed = { date: todayStr(), method: 'manual', by, ...(note ? { note } : {}) };
-        }, `Complete: ${item.text.slice(0, 60)} (${by})`);
-        closeModal(); render();
-        toast('Completed — saved for the whole team.', 'ok');
-      } catch (err) {
-        btn.disabled = false;
-        toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
-      }
-    } else {
-      const ld = localDone();
-      ld[item.id] = { date: todayStr(), method: 'manual', by, ...(note ? { note } : {}) };
-      setLocalDone(ld);
+    const by = editorName();
+    const op = baseOp('complete', { itemId: item.id, ...(note ? { note } : {}) });
+    let tok = effectiveToken();
+    if (!tok && !state.snapshot) { await loadTeamKey(); tok = effectiveToken(); }
+    if (!tok) { queueAndClose(op); return; }
+    try {
+      await remoteMutate((d) => {
+        const it = d.actionItems.find(i => i.id === item.id);
+        if (!it) throw new Error('Item no longer exists — refresh.');
+        it.status = 'completed';
+        it.completed = { date: todayStr(), method: 'manual', by, ...(note ? { note } : {}) };
+      }, `Complete: ${item.text.slice(0, 60)} (${by})`);
       closeModal(); render();
-      toast('Marked complete on this device (not synced).', 'warn');
+      toast('Completed — saved for the whole team.', 'ok');
+    } catch (err) {
+      if (isNetErr(err.message)) { queueAndClose(op); return; }
+      btn.disabled = false;
+      toast(err.message, 'warn');
     }
   });
 }
 
-function confirmReopenModal(item, isLocal) {
+function confirmReopenModal(item) {
+  const pend = pendingCompleteOp(item.id);
   const root = openModal(`
     <div class="modal-head"><h2>Reopen item</h2><button class="modal-close" data-close>×</button></div>
     <p style="margin:0 0 4px"><b>${esc(item.text)}</b></p>
-    <p class="hint">${isLocal ? 'This undoes the local-only completion on this device.' : 'Puts the item back in the open list for everyone.'}</p>
+    <p class="hint">${pend
+      ? 'This undoes the check-off queued on this device.'
+      : 'Puts the item back in the open list for everyone.'}</p>
     <div class="modal-actions">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="reopen-go">Reopen</button>
@@ -700,14 +921,19 @@ function confirmReopenModal(item, isLocal) {
     // Capture the button now — e.currentTarget is null after the first await.
     const btn = e.currentTarget;
     btn.disabled = true;
-    if (isLocal) {
-      const ld = localDone();
-      delete ld[item.id];
-      setLocalDone(ld);
+    if (pend) {
+      // Cancel the queued completion instead of layering a reopen on top.
+      setPendingOps(pendingOps().filter(o => o.id !== pend.id));
+      const it = state.data.actionItems.find(i => i.id === item.id);
+      if (it) { it.status = 'open'; it.completed = null; delete it._pending; }
       closeModal(); render();
       toast('Reopened.', 'ok');
       return;
     }
+    const op = baseOp('reopen', { itemId: item.id });
+    let tok = effectiveToken();
+    if (!tok && !state.snapshot) { await loadTeamKey(); tok = effectiveToken(); }
+    if (!tok) { queueAndClose(op); return; }
     try {
       await remoteMutate((d) => {
         const it = d.actionItems.find(i => i.id === item.id);
@@ -718,8 +944,9 @@ function confirmReopenModal(item, isLocal) {
       closeModal(); render();
       toast('Reopened for the whole team.', 'ok');
     } catch (err) {
+      if (isNetErr(err.message)) { queueAndClose(op); return; }
       btn.disabled = false;
-      toast(err.message === 'no-token' ? 'Shared editing isn’t set up on this tracker yet.' : err.message, 'warn');
+      toast(err.message, 'warn');
     }
   });
 }
@@ -753,14 +980,16 @@ function editActionItemModal(item) {
       it.text = text;
       if (detail) it.detail = detail; else delete it.detail;
       it.owner = owner;
-    }, `Edit item: ${text.slice(0, 60)} (${editorName()})`, 'Item updated for the whole team.');
+    }, baseOp('item-edit', { itemId: item.id, text, detail, owner }),
+    `Edit item: ${text.slice(0, 60)} (${editorName()})`, 'Item updated for the whole team.');
   });
   armDelete(root.querySelector('#ai-delete'), (btn) => {
     saveViaMutate(btn, (d) => {
       const idx = d.actionItems.findIndex(i => i.id === item.id);
       if (idx < 0) throw new Error('That item no longer exists — refresh.');
       d.actionItems.splice(idx, 1);
-    }, `Delete item: ${item.text.slice(0, 60)} (${editorName()})`, 'Item deleted.');
+    }, baseOp('item-delete', { itemId: item.id }),
+    `Delete item: ${item.text.slice(0, 60)} (${editorName()})`, 'Item deleted.');
   });
 }
 
@@ -795,7 +1024,8 @@ function addActionItemModal(ownerId) {
         status: 'open',
         completed: null,
       });
-    }, `Add item: ${text.slice(0, 60)} (${editorName()})`, 'Item added for the whole team.');
+    }, baseOp('item-add', { owner, text, detail }),
+    `Add item: ${text.slice(0, 60)} (${editorName()})`, 'Item added for the whole team.');
   });
 }
 
@@ -844,7 +1074,8 @@ function apsEditModal() {
       });
       d.advancedPurchase.lastVerified = todayStr();
       if (note) d.advancedPurchase.lastVerifiedNote = note; else delete d.advancedPurchase.lastVerifiedNote;
-    }, `Edit advanced purchase status (${editorName()})`, 'Advanced purchase status updated.');
+    }, baseOp('aps-edit', { stages: rows.map(r => ({ ...(r.id ? { id: r.id } : {}), label: r.label, note: r.note })), footnote: note }),
+    `Edit advanced purchase status (${editorName()})`, 'Advanced purchase status updated.');
   });
 }
 
@@ -879,7 +1110,8 @@ function riskModal(risk) {
         if (detail) r.detail = detail; else delete r.detail;
         if (note) r.lastUpdateNote = note; else delete r.lastUpdateNote;
         r.lastUpdate = todayStr();
-      }, `Edit risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk updated for the whole team.');
+      }, baseOp('risk-edit', { riskId: risk.id, title, detail, note }),
+      `Edit risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk updated for the whole team.');
     } else {
       saveViaMutate(e.currentTarget, (d) => {
         d.risks.push({
@@ -889,7 +1121,8 @@ function riskModal(risk) {
           lastUpdate: todayStr(),
           ...(note ? { lastUpdateNote: note } : {}),
         });
-      }, `Add risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk added for the whole team.');
+      }, baseOp('risk-add', { title, detail, note }),
+      `Add risk: ${title.slice(0, 60)} (${editorName()})`, 'Risk added for the whole team.');
     }
   });
   if (isEdit) {
@@ -899,7 +1132,8 @@ function riskModal(risk) {
         if (idx < 0) idx = d.risks.findIndex(x => x.title === risk.title);
         if (idx < 0) throw new Error('That risk no longer exists — refresh.');
         d.risks.splice(idx, 1);
-      }, `Delete risk: ${risk.title.slice(0, 60)} (${editorName()})`, 'Risk removed.');
+      }, baseOp('risk-delete', { riskId: risk.id }),
+      `Delete risk: ${risk.title.slice(0, 60)} (${editorName()})`, 'Risk removed.');
     });
   }
 }
@@ -946,16 +1180,22 @@ function settingsModal() {
     <label for="set-name">Your name (shown on items you complete or edit)</label>
     <input id="set-name" type="text" value="${esc(name)}" placeholder="e.g. Tyler">
     <p class="hint" style="margin-top:10px">${state.teamToken
-      ? '✓ <b>Editing is on.</b> Anyone who unlocks this page can complete, edit, and add items — changes save for everyone automatically.'
-      : 'Shared editing isn’t set up yet — completing items still works on this device, and everything syncs with the next morning’s update.'}</p>
+      ? '✓ <b>Live editing is on.</b> Completes, edits, and new items save for the whole team instantly.'
+      : '<b>Editing works offline here.</b> Changes save on this device instantly; tap “📤 Send sync” up top and they land for the whole team at the next tracker update.'}</p>
     ${keyLine ? `<p class="hint" style="margin-top:4px">${keyLine}</p>` : ''}
+    ${pendingOps().some(o => o.sentAt) ? `<p class="hint" style="margin-top:4px">${pendingOps().filter(o => o.sentAt).length} synced change(s) sent, awaiting the next update. <button class="btn btn-small" id="set-resend">Re-queue them</button> if the email never went out.</p>` : ''}
     <div class="settings-info">
-      <b>How it works.</b> The tracker is a single encrypted file on GitHub. Unlocking the page with the team passphrase is all you need — completes, edits, and new items save for the whole team instantly. Items closed verbally on the stand-up are picked up from the transcript each morning.
+      <b>How it works.</b> The tracker is one encrypted file; the team passphrase unlocks it. Every weekday morning the meeting transcript updates it automatically — including items people said were done — and this file/page refreshes. Edits you make in between save live where possible, or ride along via Send sync.
     </div>
     <div class="modal-actions">
       <button class="btn" id="set-lock">Lock tracker on this device</button>
       <button class="btn btn-primary" id="set-save">Save</button>
     </div>`, true);
+  root.querySelector('#set-resend')?.addEventListener('click', () => {
+    setPendingOps(pendingOps().map(o => ({ ...o, sentAt: undefined })));
+    closeModal();
+    toast('Changes re-queued — tap “📤 Send sync” to open the email again.', 'ok');
+  });
   root.querySelector('#set-save').addEventListener('click', () => {
     setLS(LS.name, root.querySelector('#set-name').value.trim() || null);
     closeModal();
@@ -996,8 +1236,7 @@ function slideLabel(s) {
 }
 
 function openCount() {
-  const ld = localDone();
-  return state.data.actionItems.filter(i => i.status === 'open' && !ld[i.id]).length;
+  return state.data.actionItems.filter(i => i.status === 'open').length;
 }
 
 function presentSlideHtml(s) {
@@ -1130,14 +1369,9 @@ async function tryUnlock(pass) {
   const data = await decryptEnvelope(state.env, pass);
   state.passphrase = pass;
   state.data = data;
-  // Drop local completions that are now completed (or gone) in shared data.
-  const ld = localDone();
-  let changed = false;
-  for (const id of Object.keys(ld)) {
-    const item = state.data.actionItems.find(i => i.id === id);
-    if (!item || item.status === 'completed') { delete ld[id]; changed = true; }
-  }
-  if (changed) setLocalDone(ld);
+  // Re-apply this device's queued sync ops on top of the shared data (and drop
+  // any the morning run has since applied — their ids land in data.appliedOps).
+  replayPendingOps();
 }
 
 function showApp() {
@@ -1148,6 +1382,7 @@ function showApp() {
   $('#app').hidden = false;
   render();
   loadTeamKey(); // async — edit access appears as soon as the shared key decrypts
+  if (state.snapshot) refreshFromLive(); // quietly upgrade to live data when reachable
 }
 
 function showUnlock(errMsg) {
@@ -1214,7 +1449,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  $('#btn-sync').addEventListener('click', () => refresh(true));
+  $('#btn-sync').addEventListener('click', () => (state.snapshot ? refreshFromLive(true) : refresh(true)));
+  $('#btn-sendsync').addEventListener('click', sendSync);
   $('#btn-history').addEventListener('click', historyModal);
   $('#btn-settings').addEventListener('click', settingsModal);
   $('#btn-theme').addEventListener('click', cycleTheme);
@@ -1226,7 +1462,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const item = state.data.actionItems.find(i => i.id === chk.dataset.id);
       if (!item) return;
       if (chk.dataset.action === 'complete') confirmCompleteModal(item);
-      else confirmReopenModal(item, !!localDone()[item.id]);
+      else confirmReopenModal(item);
       return;
     }
     const edit = e.target.closest('.ai-edit');
@@ -1284,7 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const item = state.data.actionItems.find(i => i.id === chk.dataset.id);
       if (!item) return;
       if (chk.dataset.action === 'complete') confirmCompleteModal(item);
-      else confirmReopenModal(item, !!localDone()[item.id]);
+      else confirmReopenModal(item);
       return;
     }
     const edit = e.target.closest('.ai-edit');

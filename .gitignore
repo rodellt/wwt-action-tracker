@@ -1,6 +1,9 @@
 # Plaintext tracker data — only the encrypted file is committed
 data/data.json
 
+# Built distributable (regenerated daily; lives in the Teams channel, not git)
+dist/
+
 # Secrets (team passphrase)
 .secrets/
 

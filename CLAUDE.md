@@ -13,6 +13,10 @@ it in the browser with the team passphrase.
 - `.secrets/passphrase.txt` — team passphrase (gitignored). Same passphrase the team types into the page.
 - `scripts/publish.mjs` — data.json → data.enc.json (encrypt).
 - `scripts/sync.mjs` — data.enc.json → data.json (decrypt). Run after `git pull`.
+- `scripts/build-html.mjs` — builds `dist/HPT-Tracker.html`, the SELF-CONTAINED
+  single file (inlined css/js + embedded encrypted snapshot) that the team
+  actually uses, delivered via the Cox HPT Teams channel (GitHub Enterprise
+  blocks github.io for users). Rebuild + re-upload after every data change.
 - `scripts/extract-docx.mjs` — dumps transcript text: `node scripts/extract-docx.mjs "<path>.docx"`.
 - `scripts/serve.mjs` — local preview server (port 8420).
 - Web completions: the page itself can commit to `data/data.enc.json` via the GitHub
@@ -87,6 +91,25 @@ occurrence the same way, process oldest → newest, and never re-process a date
 already in `meetings[]`. No "Cox HPT" event on the calendar = holiday, just say
 so. Finish every run with a push notification: new/completed action items,
 APO/risk/PTO changes, and anything ambiguous.
+
+## SYNC OPS (team edits from the distributed file)
+
+The single-file tracker can't reach GitHub on the corporate network, so edits
+made there queue as "ops" and arrive as emails to the owner's mailbox with
+subject `HPT-SYNC` and a body containing `HPT-OPS:<base64 JSON array>:END`.
+Every daily run FIRST applies these to data/data.json:
+
+- op = `{id, ts, by, kind, ...}`; apply unless `id` is already in
+  `data.appliedOps`; afterwards append the id to `data.appliedOps`
+  (keep newest ~200). Never write `_pending`/`_op` fields into data.json.
+- kinds: `complete` {itemId, note?} → status completed, completed{date: op
+  date, method "manual", by, note} (skip if missing/already done) ·
+  `reopen` {itemId} · `item-edit` {itemId, text, detail, owner} ·
+  `item-add` {owner, text, detail?} → new `ai-YYYYMMDD-wNN`, source
+  "web — <by>" · `item-delete` {itemId} · `risk-edit`/`risk-add`/`risk-delete` ·
+  `aps-edit` {stages, footnote} → replace stages, stamp lastVerified.
+- The owner's `CONFIG.syncEmail` in js/app.js says where the mails go —
+  update it when ownership changes.
 
 ## Conventions & gotchas
 
