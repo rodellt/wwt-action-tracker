@@ -69,11 +69,14 @@ work plus a couple of days of watching it run.
 
 > **Since v2.0 the team's copy is a FILE, not a URL:** every morning the
 > routine rebuilds `HPT-Tracker.html` (self-contained, encrypted snapshot
-> embedded) and uploads it to the **Cox HPT Teams channel** — that file is what
-> the team opens, since GitHub Enterprise blocks github.io for users. Their
-> edits queue inside the file and come back as `HPT-SYNC` emails to the owner's
-> mailbox, applied automatically at the next run. GitHub Pages still works as
-> the owner's live view.
+> embedded) and uploads it to Teams — team **"Cox Communications Program
+> Information"** → General channel → **Documents › General › Daily HPT
+> Meeting › Action Tracker** (next to the old Excel) — since GitHub Enterprise
+> blocks github.io for users. Team members Sync that folder via OneDrive and
+> open the file from a shortcut; their edits queue inside the file and come
+> back as `HPT-SYNC` emails to the owner's mailbox (`CONFIG.syncEmail` in
+> js/app.js), applied automatically at the next run. GitHub Pages still works
+> as the owner's live view.
 
 ## 1. What this is
 
