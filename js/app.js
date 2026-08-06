@@ -1396,10 +1396,19 @@ function showUnlock(errMsg) {
 
 async function refresh(showToast = false) {
   try {
-    const env = await fetchEnvelope();
+    // Refresh must come from the LIVE sources — never re-read the embedded
+    // snapshot (that caused pages that had upgraded to live data to revert
+    // to the file's older built-in copy a couple of minutes later).
+    const env = IS_FILE ? await fetchEnvelopeLive() : await fetchEnvelope();
     if (env.ct === state.env?.ct) { if (showToast) toast('Already up to date.', 'ok'); return; }
+    // Never step backwards in time, whatever the source served us.
+    if ((env.lastUpdated ?? '') < (state.env?.lastUpdated ?? '')) {
+      if (showToast) toast('The server copy is older than what you’re viewing — keeping the newer data.', 'warn');
+      return;
+    }
     state.env = env;
     await tryUnlock(state.passphrase);
+    state.snapshot = false;
     render();
     if (showToast) toast('Tracker updated.', 'ok');
   } catch (e) {
