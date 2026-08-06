@@ -1,10 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="auto">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Cox HPT â€” Daily Stand-Up Tracker</title>
+<title>Cox HPT — Daily Stand-Up Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c9243f'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/styles.css?v=2.0.1">
 <script>
@@ -15,7 +15,7 @@
   window.__HPT = { booted: false, step: 'starting', errs: errs };
   function safe(s) { return String(s).replace(/</g, '&lt;'); }
   window.addEventListener('error', function (e) {
-    errs.push(safe((e.message || 'script error') + (e.filename ? ' â€” ' + e.filename.split('/').pop() + ':' + (e.lineno || '?') : '')));
+    errs.push(safe((e.message || 'script error') + (e.filename ? ' — ' + e.filename.split('/').pop() + ':' + (e.lineno || '?') : '')));
   });
   window.addEventListener('unhandledrejection', function (e) {
     var r = e.reason;
@@ -32,7 +32,7 @@
         '<p style="margin:0 0 6px">Stopped at: <b>' + safe(window.__HPT.step) + '</b></p>' +
         (errs.length ? '<p style="margin:0 0 12px;word-break:break-word;opacity:.8">' + errs.join('<br>') + '</p>' : '') +
         '<p style="margin:0 0 16px">If this is a work laptop, a security agent may be blocking part of the page. ' +
-        'Try a hard refresh (Ctrl+F5), a different browser, or your phone â€” and pass along the text above.</p>' +
+        'Try a hard refresh (Ctrl+F5), a different browser, or your phone — and pass along the text above.</p>' +
         '<button onclick="location.reload()" style="padding:9px 20px;border-radius:8px;border:1px solid #999;background:#c9243f;color:#fff;font-weight:600;cursor:pointer">Retry</button>' +
         '</div>';
     }, 9000);
@@ -44,7 +44,7 @@
 
 <div id="unlock" class="overlay" hidden>
   <div class="unlock-box">
-    <div class="unlock-logo">âœ“</div>
+    <div class="unlock-logo">✓</div>
     <h1>Cox HPT Stand-Up Tracker</h1>
     <p class="muted">The tracker data is encrypted. Enter the team passphrase to view it.</p>
     <form id="unlock-form">
@@ -58,14 +58,14 @@
 
 <div id="loading" class="overlay">
   <div class="spinner"></div>
-  <p class="muted" id="loading-step">Loading trackerâ€¦</p>
+  <p class="muted" id="loading-step">Loading tracker…</p>
   <noscript><p>This page needs JavaScript enabled to decrypt and show the tracker.</p></noscript>
 </div>
 
 <header class="topbar" id="topbar" hidden>
   <div class="topbar-row">
     <div class="brand">
-      <span class="brand-mark">âœ“</span>
+      <span class="brand-mark">✓</span>
       <div>
         <div class="brand-title">Cox HPT</div>
         <div class="brand-sub">Daily Stand-Up Tracker</div>
@@ -73,12 +73,12 @@
     </div>
     <div class="topbar-actions">
       <span id="asof" class="asof" title="When the tracker data was last updated"></span>
-      <button id="btn-sendsync" class="btn btn-primary" hidden title="Email your queued changes to the tracker â€” they apply for everyone at the next update">ðŸ“¤ Send sync</button>
-      <button id="btn-present" class="btn btn-primary" title="Full-screen mode for the daily call">â–¶ Present</button>
-      <button id="btn-sync" class="btn btn-ghost" title="Fetch the latest data">âŸ³ Sync</button>
+      <button id="btn-sendsync" class="btn btn-primary" hidden title="Email your queued changes to the tracker — they apply for everyone at the next update">📤 Send sync</button>
+      <button id="btn-present" class="btn btn-primary" title="Full-screen mode for the daily call">▶ Present</button>
+      <button id="btn-sync" class="btn btn-ghost" title="Fetch the latest data">⟳ Sync</button>
       <button id="btn-history" class="btn btn-ghost">Meeting history</button>
-      <button id="btn-theme" class="btn btn-icon" title="Theme (auto â†’ light â†’ dark)">â—</button>
-      <button id="btn-settings" class="btn btn-icon" title="Settings">âš™</button>
+      <button id="btn-theme" class="btn btn-icon" title="Theme (auto → light → dark)">◐</button>
+      <button id="btn-settings" class="btn btn-icon" title="Settings">⚙</button>
     </div>
   </div>
   <nav id="groupnav" class="groupnav" aria-label="Jump to team"></nav>
@@ -92,7 +92,7 @@
       <div class="card-head">
         <h2>Advanced Purchase Status</h2>
         <span class="chip" id="aps-verified"></span>
-        <button id="btn-aps-edit" class="btn btn-small btn-ghost" title="Edit the purchase status">âœŽ Edit</button>
+        <button id="btn-aps-edit" class="btn btn-small btn-ghost" title="Edit the purchase status">✎ Edit</button>
       </div>
       <div id="aps-body"></div>
     </div>
@@ -100,7 +100,7 @@
       <div class="card-head">
         <h2>Current Risks &amp; Updates</h2>
         <span class="chip" id="risks-count"></span>
-        <button id="btn-risk-add" class="btn btn-small btn-ghost" title="Add a risk">ï¼‹ Add</button>
+        <button id="btn-risk-add" class="btn btn-small btn-ghost" title="Add a risk">＋ Add</button>
       </div>
       <ul id="risks-body" class="risk-list"></ul>
     </div>
@@ -112,27 +112,27 @@
 
   <footer class="footer">
     <span id="footer-updated"></span><span id="footer-key"></span>
-    <span>Â·</span>
+    <span>·</span>
     <a id="footer-repo" href="#" target="_blank" rel="noopener">GitHub repo</a>
-    <span>Â·</span>
-    <span>Updated after each stand-up from the meeting transcript. Complete, edit, or add items right here â€” or say it on the call and it'll be picked up with the next update.</span>
+    <span>·</span>
+    <span>Updated after each stand-up from the meeting transcript. Complete, edit, or add items right here — or say it on the call and it'll be picked up with the next update.</span>
   </footer>
 </main>
 
 <div id="present" hidden>
   <div class="present-head">
-    <div class="present-brand"><span class="brand-mark">âœ“</span> Cox HPT Stand-Up</div>
+    <div class="present-brand"><span class="brand-mark">✓</span> Cox HPT Stand-Up</div>
     <div class="present-head-right">
       <span id="present-progress"></span>
-      <button class="btn btn-small" id="present-exit" title="Exit presentation (Esc)">âœ• Exit</button>
+      <button class="btn btn-small" id="present-exit" title="Exit presentation (Esc)">✕ Exit</button>
     </div>
   </div>
   <div class="present-body" id="present-slide"></div>
   <div class="present-foot">
     <span id="present-next-label"></span>
     <span class="present-nav">
-      <button class="btn" id="present-prev">â† Back</button>
-      <button class="btn btn-primary" id="present-next">Next â†’</button>
+      <button class="btn" id="present-prev">← Back</button>
+      <button class="btn btn-primary" id="present-next">Next →</button>
     </span>
   </div>
 </div>
