@@ -151,7 +151,8 @@ Edits made in the page queue as ops and arrive as emails to the owner's mailbox
 
 ## Verifying changes
 
-`node scripts/serve.mjs` then open http://localhost:3000 — or preview the
-built file at `/dist/HPT-Tracker.html` (that's what the team actually uses).
+`node scripts/serve.mjs` then open the URL it prints (default
+http://localhost:8420) — or preview the built file at `/dist/HPT-Tracker.html`
+(that's what the team actually uses).
 Passphrase from `.secrets`. Verify VISUALLY (computed styles / screenshots),
 not just DOM state.

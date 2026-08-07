@@ -5,14 +5,13 @@
 // rebuild and ship the file (build-html.mjs → copy to the team folder), update
 // the passphrase line in the cloud routine's instructions
 // (claude.ai/code/routines), and tell the team — everyone re-enters it once.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { encryptEnvelope, decryptEnvelope } from './crypto-utils.mjs';
+import { encryptEnvelope } from './crypto-utils.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const secretsPath = join(root, '.secrets', 'passphrase.txt');
-const keyPath = join(root, 'data', 'edit-key.enc.json');
 
 const newPass = (process.argv[2] ?? '').trim();
 if (!newPass) {
@@ -25,20 +24,11 @@ if (newPass === oldPass) {
   process.exit(1);
 }
 
-// 1. Re-encrypt the edit key under the new passphrase (payload preserved verbatim).
-if (existsSync(keyPath)) {
-  const payload = await decryptEnvelope(JSON.parse(readFileSync(keyPath, 'utf8')), oldPass);
-  writeFileSync(keyPath, JSON.stringify(await encryptEnvelope(payload, newPass), null, 2) + '\n');
-  console.log('Edit key re-encrypted under the new passphrase.');
-} else {
-  console.log('No edit key published — skipping that step.');
-}
-
-// 2. Swap the local secret.
+// 1. Swap the local secret.
 writeFileSync(secretsPath, newPass + '\n');
 console.log('.secrets/passphrase.txt updated.');
 
-// 3. Re-encrypt the tracker data (data/data.json must be current — run sync first).
+// 2. Re-encrypt the tracker data (data/data.json must be current — run sync first).
 const data = JSON.parse(readFileSync(join(root, 'data', 'data.json'), 'utf8'));
 writeFileSync(join(root, 'data', 'data.enc.json'), JSON.stringify(await encryptEnvelope(data, newPass), null, 2) + '\n');
 console.log('Tracker data re-encrypted.');

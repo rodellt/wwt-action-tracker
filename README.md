@@ -1,40 +1,36 @@
 # Cox HPT — Daily Stand-Up Tracker
 
-A lightweight, no-VPN-needed web tracker for a daily stand-up call: per-speaker notes
-and action items, advance purchase status, current risks, and team PTO/OOO — updated
-after each call from the meeting transcript.
+A self-contained, encrypted stand-up tracker for a daily team call: per-person
+action items and notes, a movable advanced-purchase status card, current risks,
+and PTO/OOO — updated every weekday morning from the meeting transcript by a
+scheduled Claude Code run.
 
-**Live page:** https://rodellt.github.io/wwt-action-tracker/
+**This repo holds code only.** The tracker itself ships as one built file
+(`dist/HPT-Tracker.html`) living in the team's SharePoint/Teams folder, with
+the AES-256-GCM-encrypted data envelope embedded. No data, no tokens, no
+hosting here — and the page makes zero network calls.
 
 ## How it works
 
-- All tracker content lives in one **encrypted** file (`data/data.enc.json`,
-  AES-256-GCM with a PBKDF2-derived key). The page asks for the team passphrase once
-  per device and decrypts in the browser. The hosting is public; the data is not.
-- After each stand-up, the meeting transcript is processed with Claude Code, which
-  updates notes, action items (including ones verbally closed on the call), advance
-  purchase status, risks, and PTO — then commits the re-encrypted file.
-- Action items stay on the page until completed — either **verbally on the call**
-  (picked up from the next transcript) or **manually** via the ✓ button.
-- One-click completion for the whole team requires a GitHub fine-grained personal
-  access token (Settings ⚙ on the page): repo `wwt-action-tracker`, permission
-  **Contents: Read and write**, nothing else. Without a token, completions are saved
-  on that device only and folded in at the next transcript update.
+- `index.html` + `css/` + `js/` — vanilla app, no build step, no dependencies.
+- `scripts/build-html.mjs` inlines the source and embeds the local (gitignored)
+  `data/data.enc.json` into `dist/HPT-Tracker.html`.
+- The team unlocks the file with a shared passphrase (PBKDF2 → AES-256-GCM,
+  decrypted in the browser). Edits apply on-device and travel to the owner as
+  "📤 Send sync" emails, applied for everyone by the next morning's run.
+- Retention is automatic: completed items drop after 2 business days, meeting
+  history after 14 days (`scripts/publish.mjs` prunes on every encrypt, and the
+  page enforces the same windows on display).
 
-## Local preview
+## Working on it
 
 ```
-node scripts/serve.mjs
-# → http://localhost:8420
+node scripts/pull-dist.mjs   # team file's embedded envelope -> data/data.enc.json
+node scripts/sync.mjs        # decrypt -> data/data.json (needs .secrets/passphrase.txt)
+node scripts/serve.mjs       # local preview (prints its URL; default port 8420)
+node scripts/publish.mjs     # prune + re-encrypt data.json -> data.enc.json
+node scripts/build-html.mjs  # rebuild dist/HPT-Tracker.html
 ```
 
-## Repo layout
-
-| Path | What |
-|---|---|
-| `index.html`, `css/`, `js/` | The site (vanilla, no build step) |
-| `data/data.enc.json` | Encrypted tracker data (the only committed data) |
-| `data/data.json` | Plaintext working copy — **gitignored** |
-| `scripts/publish.mjs` / `sync.mjs` | Encrypt / decrypt between the two |
-| `scripts/extract-docx.mjs` | Transcript text extraction |
-| `CLAUDE.md` | The daily update workflow Claude Code follows |
+The operational runbook (daily workflow, scheduled runs, conventions) lives in
+`CLAUDE.md`; ownership handoff lives in `ONBOARDING.md`.
