@@ -1160,6 +1160,18 @@ function cycleTheme() {
   toast(`Theme: ${next}`);
 }
 
+// Belt-and-braces retention on the display side: the morning publish prunes
+// the data file itself, but an out-of-date copy of the tracker must still
+// honor the two-week meeting window on screen. (Completed items get the same
+// treatment per-render in doneItems().)
+function applyRetention(d) {
+  const meetings = (d.meetings ?? []).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const horizon = new Date(parseDay(todayStr()).getTime() - 14 * 86400000)
+    .toISOString().slice(0, 10);
+  const kept = meetings.filter(m => m.date >= horizon);
+  d.meetings = kept.length ? kept : meetings.slice(0, 1); // never render an empty tracker
+}
+
 async function tryUnlock(pass) {
   const data = await decryptEnvelope(state.env, pass);
   applyRetention(data);
