@@ -1,11 +1,10 @@
 // Rotate the team passphrase in one pass.
 //   node scripts/rotate-passphrase.mjs <new-passphrase>
 //
-// Re-encrypts the edit key (in memory — the token is never printed) from the
-// old passphrase to the new one, updates .secrets/passphrase.txt, and
-// re-encrypts the tracker data. Commit and push data/*.enc.json afterwards,
-// and remember: the cloud routine's instructions carry the passphrase too —
-// update it at claude.ai/code/routines — and the team needs the new phrase.
+// Updates .secrets/passphrase.txt and re-encrypts the tracker data. Afterwards
+// rebuild and ship the file (build-html.mjs → copy to the team folder), update
+// the passphrase line in the cloud routine's instructions
+// (claude.ai/code/routines), and tell the team — everyone re-enters it once.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -43,5 +42,5 @@ console.log('.secrets/passphrase.txt updated.');
 const data = JSON.parse(readFileSync(join(root, 'data', 'data.json'), 'utf8'));
 writeFileSync(join(root, 'data', 'data.enc.json'), JSON.stringify(await encryptEnvelope(data, newPass), null, 2) + '\n');
 console.log('Tracker data re-encrypted.');
-console.log('\nNext: commit & push data/data.enc.json and data/edit-key.enc.json,');
-console.log('update the cloud routine’s passphrase line, and tell the team.');
+console.log('\nNext: node scripts/build-html.mjs, copy dist/HPT-Tracker.html to the');
+console.log('team folder, update the cloud routine’s passphrase line, and tell the team.');

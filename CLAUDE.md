@@ -1,103 +1,111 @@
 # Cox HPT Daily Stand-Up Tracker
 
-A static webpage (GitHub Pages) that replaces the screen-shared Excel "Action Tracker"
-for the Cox HPT daily stand-up. Claude Code updates it after every call from the
-Teams transcript (.docx). The data is a single encrypted JSON file; the page decrypts
-it in the browser with the team passphrase.
+The team's daily stand-up tracker (replaced the screen-shared Excel). Since v3
+it is **SharePoint-native**: the tracker ships as ONE self-contained file,
+`HPT-Tracker.html`, living in the team's Teams/SharePoint folder. Claude Code
+updates it after every call from the Teams transcript. **GitHub stores code
+only** — no data, no tokens, no Pages site, and the page itself never talks to
+GitHub.
 
-## Architecture
+## Architecture (v3)
 
-- `index.html` + `css/styles.css` + `js/app.js` — the site (no build step, no dependencies).
-- `data/data.json` — **plaintext working copy** (gitignored — never commit).
-- `data/data.enc.json` — AES-256-GCM encrypted envelope, **the only data file committed**.
-- `.secrets/passphrase.txt` — team passphrase (gitignored). Same passphrase the team types into the page.
-- `scripts/publish.mjs` — data.json → data.enc.json (encrypt).
-- `scripts/sync.mjs` — data.enc.json → data.json (decrypt). Run after `git pull`.
-- `scripts/build-html.mjs` — builds `dist/HPT-Tracker.html`, the SELF-CONTAINED
-  single file (inlined css/js + embedded encrypted snapshot) that the team
-  actually uses, delivered via the Cox HPT Teams channel (GitHub Enterprise
-  blocks github.io for users). Rebuild + re-upload after every data change.
-- `scripts/extract-docx.mjs` — dumps transcript text: `node scripts/extract-docx.mjs "<path>.docx"`.
-- `scripts/serve.mjs` — local preview server (port 8420).
-- Web completions: the page itself can commit to `data/data.enc.json` via the GitHub
-  Contents API using the user's fine-grained PAT (stored in their browser).
-  So **always pull + sync before editing data.json.**
+- `index.html` + `css/styles.css` + `js/app.js` — the app source (no build deps).
+- `dist/HPT-Tracker.html` — the built artifact and THE tracker: source files
+  inlined + the AES-256-GCM encrypted data envelope embedded. The team's copy
+  lives in the OneDrive-synced folder
+  `C:\Users\rodellt\WWT\Cox Communications Program Information - Action Tracker\`
+  which syncs to Teams team **"Cox Communications Program Information"** →
+  Documents › General › Daily HPT Meeting › Action Tracker.
+  **That file's embedded envelope is the source of truth for data.**
+- `data/data.json` (plaintext) and `data/data.enc.json` (encrypted) — LOCAL
+  working files only; both gitignored, never committed.
+- `.secrets/passphrase.txt` — team passphrase (gitignored). Same passphrase the
+  team types into the page.
+- Scripts (`node scripts/<name>.mjs`):
+  - `pull-dist.mjs` — team file's embedded envelope → `data/data.enc.json`.
+    **Run FIRST in any data-editing session** (refuses to go backwards in time).
+  - `sync.mjs` — `data.enc.json` → `data.json` (decrypt).
+  - `publish.mjs` — `data.json` → `data.enc.json` (encrypt). Also enforces
+    retention automatically: meetings older than 14 days and completed items
+    more than 2 business days old are pruned on every publish.
+  - `build-html.mjs` — rebuilds `dist/HPT-Tracker.html` from source + envelope.
+  - `extract-docx.mjs "<path>.docx"` — dump transcript text.
+  - `find-transcript.mjs` — newer-than-last-processed transcripts in Downloads.
+  - `rotate-passphrase.mjs <new>` — re-encrypt under a new passphrase.
+  - `serve.mjs` — local preview server (also `tracker` in `.claude/launch.json`).
+- Web edits (complete/reopen/edit/add items, risks, APS) apply on-device and
+  queue as ops inside the page; "📤 Send sync" emails them to the owner —
+  see SYNC OPS below. There is no other write path.
 
-## THE DAILY WORKFLOW (when the user drops transcript path(s) in chat)
+## THE DAILY WORKFLOW (when the user drops transcript path(s) in chat, or a scheduled run fires)
 
-1. `git pull`
-2. `node scripts/sync.mjs` — refresh `data/data.json` from the pulled encrypted file
-   (this picks up items completed from the webpage since last time).
-3. `node scripts/extract-docx.mjs "<transcript path>"` — get the text. Read ALL of it.
-4. Update `data/data.json`:
+1. `node scripts/pull-dist.mjs` — refresh the local envelope from the team's
+   synced file (picks up everything since the last run).
+2. `node scripts/sync.mjs` — decrypt to `data/data.json`.
+3. **Apply queued team edits**: search the owner's mailbox for `HPT-SYNC`
+   emails (last ~4 days) and apply their ops FIRST — see SYNC OPS.
+4. Get the transcript text (connector or `extract-docx.mjs`) and read ALL of it.
+5. Update `data/data.json`:
    - **New meeting entry** at the top of `meetings[]` (keep sorted newest-first):
-     date, title, durationMin, `advancedPurchase` one-liner, `risks` one-liner,
-     `funFriday` (Fridays), `absent` map (only evidenced absences), and per-speaker
-     `notes` — 1–4 concise bullets each, real content only (statuses, blockers,
-     decisions, wins). Skip banter. "All set." is a valid note.
-   - **Action items**: add new ones (`id` = `ai-YYYYMMDD-NN`, owner = single member id,
-     imperative text, detail with context/names/dates, `created`, `source`, `status: "open"`).
-   - **Verbal completions**: if a speaker says something is done ("that shipped",
-     "we got the approval", "I sent it"), find the matching open item and set
+     date, title, durationMin, `risks` one-liner, `funFriday` (Fridays),
+     `absent` map (only evidenced absences), and per-speaker `notes` — 1–4
+     concise bullets each, real content only. "All set." is a valid note.
+   - **Action items**: add new ones (`id` = `ai-YYYYMMDD-NN`, owner = single
+     member id, imperative text, detail with context/names/dates, `created`,
+     `source`, `status: "open"`).
+   - **Verbal completions**: if a speaker says something is done, set
      `status: "completed"`, `completed: { date, method: "verbal", by: "Claude (transcript)", note: "<evidence>" }`.
-     Match by meaning, not exact words. When unsure, leave open and flag it to the user.
-   - **advancedPurchase**: update stage notes + `lastVerified`/`lastVerifiedNote`
-     whenever the call touches advance purchase status (IPC pipeline etc.).
-   - **risks**: update `detail`/`lastUpdate`/`lastUpdateNote`; add/remove risks when
-     the call says so (Kate owns this section on the call).
-   - **pto**: add entries when someone announces PTO/OOO ("I'm out next week", "back
-     on the 27th"). Resolve relative dates against the MEETING date, not today.
-     Members: `bo` has no transcript name (never speaks); see `transcriptNames` for mapping.
-   - Set top-level `lastUpdated` (publish.mjs also refreshes it automatically).
-5. `node scripts/publish.mjs` — re-encrypt.
-6. `git add data/data.enc.json && git commit` (message like `Stand-up 2026-07-14`),
-   `git pull --rebase`, `git push`. If the rebase pulled in a new data.enc.json,
-   redo steps 2–5 on top of it (rare).
-7. Report to the user: new/completed action items, APO + risk changes, PTO changes,
-   and anything ambiguous that needs their judgment.
+     Match by meaning. When unsure, leave open and flag it to the user.
+   - **⚠ Advanced Purchase Status is TEAM-OWNED: never create, update, move, or
+     remove anything under `advancedPurchase`** — the team edits it on the page
+     (✎ Edit) and parks the card where they want it (⠿ Move). Ops of kind
+     `aps-edit` from the team still get applied (that IS the team editing).
+   - **risks**: update `detail`/`lastUpdate`/`lastUpdateNote`; add/remove risks
+     when the call says so (Kate owns this section on the call).
+   - **pto**: add entries when someone announces PTO/OOO. Resolve relative
+     dates against the MEETING date, not today.
+   - Retention is automatic — do not hand-prune; `publish.mjs` does it.
+6. `node scripts/publish.mjs` — prune + re-encrypt.
+7. `node scripts/build-html.mjs` — rebuild the single file.
+8. **Ship it**: copy `dist/HPT-Tracker.html` over the team file:
+   `Copy-Item "<repo>\dist\HPT-Tracker.html" "C:\Users\rodellt\WWT\Cox Communications Program Information - Action Tracker\HPT-Tracker.html" -Force`
+   (OneDrive uploads it to the Teams folder automatically. If the synced folder
+   is missing, fall back to the M365 connector: `sharepoint_update_file` on
+   that file — find it via `sharepoint_search "HPT-Tracker"`.)
+9. **Git: nothing.** Data changes are never committed. Commit and push only
+   when CODE/docs changed in the same session.
+10. Report to the user: sync ops applied, new/completed action items, risk
+    changes, PTO changes, upload status, and anything ambiguous.
 
 ## SCHEDULED DAILY RUN
 
-Two layers, same workflow (see also ONBOARDING.md for the handoff view):
+Two layers, same outcome (the tracker file is updated by ~9:15–9:20 AM Central):
 
 1. **Cloud routine (primary):** "HPT daily stand-up update"
    (claude.ai/code/routines, id trig_01Q51z47mWpFnjRSpNVnytzV) runs weekdays at
-   14:00 UTC (~9 AM Central in summer) on Anthropic's servers — laptop-independent.
-   It checks out this repo, gets the passphrase from its own instructions, pulls
-   the transcript via Tyler's Microsoft 365 connector, follows THE DAILY WORKFLOW,
-   and pushes using the decrypted shared edit key. Note: fixed UTC cron means it
-   fires an hour earlier relative to Central in winter — its retry loop absorbs that.
-2. **Local fallback:** the desktop scheduled task ("hpt-daily-update") fires
-   weekdays ~9:45 AM Central, exits silently if the day is already in meetings[],
-   and otherwise runs the same workflow with these transcript sources, in order:
+   **14:15 UTC** (9:15 AM Central in summer; fires 8:15 AM Central after the
+   November time change — it polls for the transcript, so it still lands, just
+   earlier). It is **git-free**: it reads the team file via the M365 connector,
+   extracts the embedded envelope, decrypts with the passphrase in its own
+   instructions, applies HPT-SYNC ops + the day's transcript, re-encrypts,
+   swaps the envelope inside the same HTML (replace the
+   `window.__HPT_EMBEDDED = {...};` payload and the `window.__HPT_BUILD`
+   stamp), and uploads via `sharepoint_update_file`. It never needs GitHub.
+2. **Local fallback:** desktop scheduled task "hpt-daily-update", weekdays
+   ~9:45 AM Central. Exits silently if the team file's data is already
+   today's; otherwise runs THE DAILY WORKFLOW above (transcript via connector,
+   Downloads as backup) and ships by file copy.
 
-1. **Microsoft 365 connector (primary, zero-click).** `outlook_calendar_search`
-   for today's "Cox HPT" event (organizer Katelyn.Mentzer@wwt.com) →
-   `read_resource` the event URI → take its `meetingTranscriptUrl` field
-   verbatim → `read_resource` it. Returns the meeting's WebVTT transcript
-   (`<v Lastname, Firstname>text</v>` cues) — same content as the .docx
-   download; process it with THE DAILY WORKFLOW (meeting date = the event date;
-   confirm via the transcript's createdDateTime). Transcript may take a few
-   minutes after the call to appear — retry every ~5 min until 10:00 AM.
-   Read-only: never send mail / create events / modify anything via the connector.
-2. **Downloads fallback.** `node scripts/find-transcript.mjs` — lists .docx
-   transcripts in ~/Downloads whose INTERNAL meeting date is newer than the last
-   processed meeting (run `git pull` + `node scripts/sync.mjs` first so the
-   comparison is fresh). Used when the connector is disconnected or erroring;
-   in that case also tell Tyler to reconnect it (Settings → Connectors).
-
-Catch-up: if more than one weekday is missing, fetch each missed day's
-occurrence the same way, process oldest → newest, and never re-process a date
-already in `meetings[]`. No "Cox HPT" event on the calendar = holiday, just say
-so. Finish every run with a push notification: new/completed action items,
-APO/risk/PTO changes, and anything ambiguous.
+Catch-up: process missed weekdays oldest → newest; never re-process a date
+already in `meetings[]`. No "Cox HPT" calendar event = holiday, just say so.
+Wednesdays often have no meeting. Finish every run with a push notification:
+sync ops applied, new/completed action items, risk/PTO changes, ambiguities.
 
 ## SYNC OPS (team edits from the distributed file)
 
-The single-file tracker can't reach GitHub on the corporate network, so edits
-made there queue as "ops" and arrive as emails to the owner's mailbox with
-subject `HPT-SYNC` and a body containing `HPT-OPS:<base64 JSON array>:END`.
-Every daily run FIRST applies these to data/data.json:
+Edits made in the page queue as ops and arrive as emails to the owner's mailbox
+(`CONFIG.syncEmail` in js/app.js) with subject `HPT-SYNC` and a body containing
+`HPT-OPS:<base64 JSON array>:END`. Every daily run applies these FIRST:
 
 - op = `{id, ts, by, kind, ...}`; apply unless `id` is already in
   `data.appliedOps`; afterwards append the id to `data.appliedOps`
@@ -107,46 +115,43 @@ Every daily run FIRST applies these to data/data.json:
   `reopen` {itemId} · `item-edit` {itemId, text, detail, owner} ·
   `item-add` {owner, text, detail?} → new `ai-YYYYMMDD-wNN`, source
   "web — <by>" · `item-delete` {itemId} · `risk-edit`/`risk-add`/`risk-delete` ·
-  `aps-edit` {stages, footnote} → replace stages, stamp lastVerified.
-- The owner's `CONFIG.syncEmail` in js/app.js says where the mails go —
-  update it when ownership changes.
+  `aps-edit` {stages, footnote} → replace stages, stamp lastVerified (this is
+  the ONLY way advancedPurchase changes).
 
 ## Conventions & gotchas
 
-- Meeting date comes from the transcript header (`Cox HPT-YYYYMMDD_...` + "July 13, 2026" line),
-  NOT from the docx file metadata (that's the download date).
-- Teams mislabels spoken names ("Brian"/"Ron" = Ryan; "Mal"/"Mo"/"Now" = Mauricio;
-  "Cheryl" = Sheryl Edwards). Trust the speaker labels (`Lastname, Firstname`) over
-  spoken names, and `transcriptNames` in data.json for mapping.
-- Two Johns: **Jon Hoey** (Account) and **John Lediaev** (Mat Ops). "John" items about
-  quotes/deals/Cisco → Hoey; receiving/non-cons/warehouse → Lediaev.
-- Call order: Advanced Purchase → Current Risks (Kate) → ISRs (Ryan, Chandra, Bo, Zach)
-  → Buyers (Nick) → Planning (Mau, Andrea) → Mat Ops (John L, Rob, AJ) → Account
-  (Sheryl, Davis, Jon H) → PM (Kate, Jessie) → CSEs (Jim, Arno) → Extended (Mickey,
-  Tori, Theresa, Jackson). Tyler facilitates.
-- Assign each action item to exactly one owner (the person who said they'd do it, or
-  who it was handed to). Joint work: pick the primary, name the others in `detail`.
-- The webpage (v1.1+) can add/edit/delete action items, risks, and the advanced
-  purchase stages. Web-created items use ids `ai-YYYYMMDD-wNN` with
-  `source: "web — <name>"` — never renumber them, and keep numbering transcript
-  items in the separate `ai-YYYYMMDD-NN` space. Web risk edits stamp `lastUpdate`;
-  web APS saves stamp `lastVerified`. Always give new risks an `id` slug
-  (`risk-...`) — the web edit flow finds risks by id (title match is only a fallback).
-- Do not commit transcripts, the Excel file, `data/data.json`, or `.secrets/`.
-- Passphrase lives in `.secrets/passphrase.txt`. Never print it into committed files.
-- `data/edit-key.enc.json` (committed) is the **shared team edit key**: a fine-grained
-  GitHub token encrypted with the team passphrase. The page decrypts it after unlock
-  so anyone with the passphrase can edit — the page itself has NO token UI (per Tyler:
-  no token system visible to users). Publish/rotate/remove it only via
-  `node scripts/publish-edit-key.mjs [--remove]` (Tyler pastes the token into his own
-  terminal; never handle the token value in a session). The daily pipeline never needs
-  it — do not decrypt, print, or delete it. If the passphrase rotates, the key must be
-  re-published afterward.
-- The site is public at https://rodellt.github.io/wwt-action-tracker/ — the repo is
-  public, only the encrypted blob is exposed. Keep every meeting detail inside
-  `data/data.json` → encrypted envelope, never in committed HTML/JS/README.
+- Meeting date comes from the transcript header/event date, NOT the docx file
+  metadata (that's the download date).
+- Teams mislabels spoken names ("Brian"/"Ron" = Ryan; "Mal"/"Mo"/"Now" =
+  Mauricio; "Cheryl" = Sheryl Edwards). Trust speaker labels
+  (`Lastname, Firstname`) and `transcriptNames` in data.json.
+- Two Johns: **Jon Hoey** (Account) and **John Lediaev** (Mat Ops). Quotes/
+  deals/Cisco → Hoey; receiving/non-cons/warehouse → Lediaev.
+- Call order: Advanced Purchase → Current Risks (Kate) → ISRs (Ryan, Chandra,
+  Bo, Zach) → Buyers (Nick) → Planning (Mau, Andrea) → Mat Ops (John L, Rob,
+  AJ) → Account (Sheryl, Davis, Jon H) → PM (Kate, Jessie) → CSEs (Jim, Arno)
+  → Extended (Mickey, Tori, Theresa, Jackson). Tyler facilitates.
+- One owner per action item; joint work: pick the primary, name others in
+  `detail`. Web-created ids `ai-YYYYMMDD-wNN` — never renumber; transcript
+  items use the separate `ai-YYYYMMDD-NN` space.
+- Completed items stay visible inline until the next day's call is processed,
+  fold after that, and disappear 2 business days after completion (display
+  filter + publish-time pruning). Meetings keep a 14-day history. Both are
+  automatic.
+- Always give new risks an `id` slug (`risk-...`) — web edits find risks by id.
+- **Encoding hazard:** never rewrite `index.html`/`css`/`js` with PowerShell
+  `-replace`/`Set-Content` — it has corrupted UTF-8 twice. Use Claude's
+  Edit/Write tools for source files.
+- Do not commit transcripts, the Excel file, `data/` contents, `dist/`, or
+  `.secrets/`. The repo is code + docs only.
+- Never print the passphrase into committed files or logs.
+- Repo home: being migrated from github.com/rodellt/wwt-action-tracker
+  (personal, public — retiring) to Tyler's enterprise account
+  (`rodellt_wwthc`), private, code-only. Update this line when done.
 
 ## Verifying changes
 
-`node scripts/serve.mjs` then open http://localhost:8420 (passphrase from .secrets).
-Or use the `tracker` entry in `.claude/launch.json`.
+`node scripts/serve.mjs` then open http://localhost:3000 — or preview the
+built file at `/dist/HPT-Tracker.html` (that's what the team actually uses).
+Passphrase from `.secrets`. Verify VISUALLY (computed styles / screenshots),
+not just DOM state.

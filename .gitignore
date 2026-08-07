@@ -1,5 +1,6 @@
-# Plaintext tracker data — only the encrypted file is committed
-data/data.json
+# Tracker data never goes to GitHub (v3: the repo is code-only — data lives in
+# the SharePoint file's embedded envelope; these are local working files)
+data/
 
 # Built distributable (regenerated daily; lives in the Teams channel, not git)
 dist/
